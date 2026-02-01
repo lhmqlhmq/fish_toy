@@ -294,7 +294,10 @@
 
       // ---------- Pointer ----------
       const pointer = { x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, lastT: performance.now(), idle: 0 };
+      const pointOfInterest = { x: W * 0.5, y: H * 0.5 };
       let lastPointerMove = performance.now();
+      let lastClickT = 0;
+
 
       addEventListener('pointermove', (e) => {
         const now = performance.now();
@@ -320,9 +323,19 @@
       const collectionNotifications = [];
 
       addEventListener('pointerdown', (e) => {
-        pointer.idle = 0;
-        lastPointerMove = performance.now();
+        const now = performance.now();
         const cx = e.clientX, cy = e.clientY;
+
+        // --- Double Click Detection for Flash Expansion ---
+        if (now - lastClickT < 300) {
+          triggerFlashExpansion(cx, cy);
+          lastClickT = 0; // reset
+          return;
+        }
+        lastClickT = now;
+
+        pointer.idle = 0;
+        lastPointerMove = now;
 
         // Hit-test collectibles first (top interactive layer)
         for (let i = collectibles.length - 1; i >= 0; i--) {
@@ -372,6 +385,32 @@
         spawnBubbleCluster(clickX, clickY);
       }
 
+      function triggerFlashExpansion(cx, cy) {
+        // Flash Expansion: Large-scale repulsion
+        const sr = Math.min(W, H) * 0.6;
+        for (const f of fish) {
+          const dx = f.x - cx, dy = f.y - cy, d = Math.hypot(dx, dy);
+          if (d < sr && d > 0.5) {
+            const p = (sr - d) / sr;
+            const force = p * 18;
+            f.vx += (dx / d) * force;
+            f.vy += (dy / d) * force;
+            // Immediate heading update for visual snap
+            f.heading = Math.atan2(f.vy, f.vx);
+
+            // Visual shimmy
+            if (p > 0.3 && !f.response) {
+              f.response = { type: 'shimmer', startTime: performance.now(), duration: 800 };
+            }
+          }
+        }
+        spawnBubbleCluster(cx, cy);
+        if (soundOn && audio) {
+          // Low frequency "thump" via bubbleTick with lower pitch/tone if possible
+          audio.bubbleTick(0.9);
+          audio.splashTick(1.0);
+        }
+      }
       // ---------- HUD ----------
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
       let SPEED = isMobile ? 0.25 : 0.6;
@@ -2755,6 +2794,14 @@
           world.autonomousMode = lerp(world.autonomousMode, 0.0, 0.15 * (dt / 16.67));
         }
 
+        // Calculate Point of Interest (POI)
+        // Blends between pointer and wandering center based on autonomousMode
+        const autonomousX = W * 0.5 + Math.sin(t * 0.0003) * W * 0.15;
+        const autonomousY = H * 0.45 + Math.cos(t * 0.0002) * H * 0.1;
+        pointOfInterest.x = lerp(pointer.x, autonomousX, world.autonomousMode);
+        pointOfInterest.y = lerp(pointer.y, autonomousY, world.autonomousMode);
+
+
         // Bubble spawn
         const mv = Math.hypot(pointer.vx, pointer.vy);
 
@@ -2789,8 +2836,9 @@
         bubbleAcc += dt * (targetHz / 1000);
         while (bubbleAcc >= 1.0) {
           bubbleAcc -= 1.0;
-          spawnBubbleCluster(pointer.x, pointer.y);
+          spawnBubbleCluster(pointOfInterest.x, pointOfInterest.y);
           if (soundOn && audio && Math.random() < 0.45) {
+
             audio.bubbleTick(0.35 + 0.4 * motion01);
             if (motion01 > 0.8 && Math.random() < 0.1) audio.splashTick(0.4 + motion01 * 0.6);
           }
@@ -2833,31 +2881,12 @@
           // --- Personalities & State Modulation ---
           let p_alignW = alignW;
           let p_cohW = cohW;
-          // Subtly reduce mouse attraction as autonomous mode increases
-          let p_attrW = plumeAttractW * (1 - world.autonomousMode * 0.95);
+          // Slowly increase autonomy weight for behaviors below
+          let p_attrW = plumeAttractW;
           let p_breakRate = 0.0018;
 
-          // If in autonomous mode, add attraction to a wandering group center
           if (world.autonomousMode > 0.1) {
-            // A slowly wandering center point
-            const centerX = W * 0.5 + Math.sin(t * 0.0003) * W * 0.15;
-            const centerY = H * 0.45 + Math.cos(t * 0.0002) * H * 0.1;
-
-            const distToCenter = Math.hypot(centerX - f.x, centerY - f.y);
-            const centerUX = (centerX - f.x) / (distToCenter + 1);
-            const centerUY = (centerY - f.y) / (distToCenter + 1);
-
-            // Gentle pull back to center so they don't wander off
-            ax += centerUX * 0.15 * world.autonomousMode;
-            ay += centerUY * 0.15 * world.autonomousMode;
-
-            // Introduce a subtle rotation/milling force
-            const tangX = -centerUY, tangY = centerUX;
-            const orbitDir = f.orbitDir || 1;
-            ax += tangX * orbitDir * 0.25 * world.autonomousMode;
-            ay += tangY * orbitDir * 0.25 * world.autonomousMode;
-
-            // Increase internal cohesion to keep the school tight
+            // Increase internal cohesion and alignment to keep the school tight during idle
             p_cohW *= (1 + world.autonomousMode * 1.5);
             p_alignW *= (1 + world.autonomousMode * 0.5);
           }
@@ -2950,10 +2979,11 @@
             ay += sepY * sepW;
           }
 
-          // Thermal plume & Orbiting
-          const pdx = pointer.x - f.x;
-          const pdy = pointer.y - f.y;
+          // Thermal plume & Orbiting - Use pointOfInterest instead of raw pointer
+          const pdx = pointOfInterest.x - f.x;
+          const pdy = pointOfInterest.y - f.y;
           const dist = Math.max(1, Math.hypot(pdx, pdy));
+
           const ux = pdx / dist, uy = pdy / dist;
 
           const orbitTargetR = f.orbitRadius || 120;
