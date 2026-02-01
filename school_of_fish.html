@@ -1879,38 +1879,163 @@
         const master = ac.createGain();
         master.gain.value = 0.0;
 
+        // --- GLOBAL FILTERS & MASTER ---
         const lp = ac.createBiquadFilter();
         lp.type = 'lowpass';
         lp.frequency.value = 2200;
-        lp.Q.value = 0.7;
+        lp.Q.value = 0.5;
+
+        const comp = ac.createDynamicsCompressor();
+        comp.threshold.setValueAtTime(-24, ac.currentTime);
+        comp.knee.setValueAtTime(30, ac.currentTime);
+        comp.ratio.setValueAtTime(12, ac.currentTime);
+        comp.attack.setValueAtTime(0.003, ac.currentTime);
+        comp.release.setValueAtTime(0.25, ac.currentTime);
+
+        const outGain = ac.createGain();
+        outGain.gain.value = 2.0; // Global loudness boost
 
         master.connect(lp);
-        lp.connect(ac.destination);
+        lp.connect(comp);
+        comp.connect(outGain);
+        outGain.connect(ac.destination);
 
+
+        // --- PINK NOISE GENERATOR (For Ocean Ambiance) ---
+        // Generates pink noise via an AudioWorklet or a Buffer:
+        // Here we use a 2-second pre-filled buffer for efficiency
+        const bufferSize = 2 * ac.sampleRate;
+        const pinkBuffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
+        const output = pinkBuffer.getChannelData(0);
+        let b0, b1, b2, b3, b4, b5, b6;
+        b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.96900 * b2 + white * 0.1538520;
+          b3 = 0.86650 * b3 + white * 0.3104856;
+          b4 = 0.55000 * b4 + white * 0.5329522;
+          b5 = -0.7616 * b5 - white * 0.0168980;
+          output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+          output[i] *= 0.11; // normalization
+          b6 = white * 0.115926;
+        }
+
+        const ambientSource = ac.createBufferSource();
+        ambientSource.buffer = pinkBuffer;
+        ambientSource.loop = true;
+        const ambientGain = ac.createGain();
+        ambientGain.gain.value = 0.15; // Increased base ocean hum
+        ambientSource.connect(ambientGain);
+        ambientGain.connect(master);
+        ambientSource.start();
+
+        // --- SUB BASS THRUM ---
         const sub = ac.createOscillator();
         sub.type = 'sine';
-        sub.frequency.value = 44;
+        sub.frequency.value = 32; // Lower, more visceral
         const subG = ac.createGain();
-        subG.gain.value = 0.010;
+        subG.gain.value = 0.025; // Boosted
         sub.connect(subG);
         subG.connect(master);
+        sub.start();
 
+
+        // --- MINNAERT BUBBLE SYNTH ---
         function bubbleTick(str = 0.35) {
           const t = ac.currentTime;
           const o = ac.createOscillator();
           o.type = 'sine';
-          o.frequency.value = 220 + Math.random() * 140;
+          const freq = 500 + (1 - str) * 3200 + Math.random() * 300;
+          o.frequency.setValueAtTime(freq, t);
+          o.frequency.exponentialRampToValueAtTime(freq * 0.75, t + 0.12);
+
           const g = ac.createGain();
-          g.gain.value = 0.0001;
+          g.gain.setValueAtTime(0.0001, t);
+          const peak = 0.03 * clamp01(str); // Boosted peak
+          g.gain.exponentialRampToValueAtTime(peak, t + 0.005);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+
           o.connect(g);
           g.connect(master);
-          const peak = 0.010 * clamp01(str);
-          g.gain.setValueAtTime(0.0001, t);
-          g.gain.exponentialRampToValueAtTime(peak, t + 0.02);
-          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
           o.start(t);
-          o.stop(t + 0.4);
+          o.stop(t + 0.5);
         }
+
+
+        // --- SPLASH SYNTH (White Noise transient) ---
+        function splashTick(str = 0.5) {
+          const t = ac.currentTime;
+          const bufferSize = ac.sampleRate * 0.5; // 0.5s splash
+          const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+          const source = ac.createBufferSource();
+          source.buffer = buffer;
+
+          const filter = ac.createBiquadFilter();
+          filter.type = 'bandpass';
+          filter.frequency.setValueAtTime(1500, t);
+          filter.frequency.exponentialRampToValueAtTime(800, t + 0.3);
+          filter.Q.value = 2;
+
+          const g = ac.createGain();
+          const peak = 0.02 * str;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+
+          source.connect(filter);
+          filter.connect(g);
+          g.connect(master);
+          source.start(t);
+          source.stop(t + 0.5);
+        }
+
+        // --- AMBIENT MODULATION (Ocean Churn) ---
+        function setAmbiance(speed, density, turning) {
+          const t = ac.currentTime;
+          // More movement = louder pink noise and higher filter cutoff
+          const activity = speed * 0.7 + density * 0.3 + turning * 1.5;
+          const targetHum = 0.08 + activity * 0.25;
+          ambientGain.gain.setTargetAtTime(clamp(targetHum, 0.08, 0.45), t, 0.3);
+
+          const targetFreq = 1400 + activity * 2200;
+          lp.frequency.setTargetAtTime(clamp(targetFreq, 1000, 5000), t, 0.5);
+        }
+
+        // --- SWISH EFFECT (Coupled to fish movement) ---
+        function swish(str = 0.5) {
+          if (!soundOn) return;
+          const t = ac.currentTime;
+          const o = ac.createOscillator();
+          o.type = 'sine'; // Use sine filtered noise for a "whoosh"
+          o.frequency.setTargetAtTime(100 + Math.random() * 200, t, 0.1);
+
+          const g = ac.createGain();
+          const peak = 0.012 * str;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(peak, t + 0.05);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+
+          const filteredNoise = ac.createBiquadFilter();
+          filteredNoise.type = 'bandpass';
+          filteredNoise.frequency.value = 600 + Math.random() * 800;
+          filteredNoise.Q.value = 1.5;
+
+          // Reuse a bit of pink noise for the swish texture
+          const swishSource = ac.createBufferSource();
+          swishSource.buffer = pinkBuffer;
+
+          swishSource.connect(filteredNoise);
+          filteredNoise.connect(g);
+          g.connect(master);
+          swishSource.start(t);
+          swishSource.stop(t + 0.3);
+        }
+
 
         // Event sound - low rumble
         function eventRumble(intensity = 0.5) {
@@ -1965,8 +2090,6 @@
           }
         }
 
-        sub.start();
-
         return {
           ac, master,
           enable() {
@@ -1982,11 +2105,16 @@
             master.gain.linearRampToValueAtTime(0.0, t + 0.35);
           },
           bubbleTick,
+          splashTick,
+          setAmbiance,
+          swish,
           eventRumble,
           predatorApproach,
           predatorVictory
         };
+
       }
+
 
       document.getElementById('snd').onclick = async () => {
         if (!audio) {
@@ -2546,6 +2674,32 @@
         // Bubble spawn
         const mv = Math.hypot(pointer.vx, pointer.vy);
         const motion01 = clamp01(mv * 60);
+
+        // Update overall ambiance based on activity
+        if (soundOn && audio) {
+          // Calculate school's aggregate "energy"
+          let totalSpeed = 0;
+          let totalTurning = 0;
+          const sampleCount = Math.min(fish.length, 50);
+          for (let i = 0; i < sampleCount; i++) {
+            const f = fish[i];
+            totalSpeed += Math.hypot(f.vx, f.vy);
+            if (f.lastHeading !== undefined) {
+              const diff = Math.abs(f.heading - f.lastHeading);
+              totalTurning += Math.min(diff, 0.1);
+            }
+            f.lastHeading = f.heading;
+          }
+          const density = densityCenter.strength || 0;
+          audio.setAmbiance(totalSpeed / sampleCount, density, totalTurning / sampleCount);
+
+          // Randomly trigger swishes based on turns
+          if (Math.random() < 0.05 * totalTurning) {
+            audio.swish(0.4 + motion01 * 0.6);
+          }
+        }
+
+
         const targetHz = 1.0 * (0.85 + 0.35 * motion01);
         bubbleAcc += dt * (targetHz / 1000);
         while (bubbleAcc >= 1.0) {
@@ -2553,8 +2707,10 @@
           spawnBubbleCluster(pointer.x, pointer.y);
           if (soundOn && audio && Math.random() < 0.45) {
             audio.bubbleTick(0.35 + 0.4 * motion01);
+            if (motion01 > 0.8 && Math.random() < 0.1) audio.splashTick(0.4 + motion01 * 0.6);
           }
         }
+
 
         // Event Director update
         updateEventDirector(dt, t);
