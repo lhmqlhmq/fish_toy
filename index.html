@@ -1,0 +1,3175 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Deep Ocean School — Enhanced</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #040a12;
+      cursor: default;
+      user-select: none
+    }
+
+    canvas {
+      display: block
+    }
+
+    .hud {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      padding: 12px 16px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.15);
+      /* Lighter background */
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 10;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .hud .grp {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .hud button {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+      cursor: pointer;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s, background 0.2s;
+    }
+
+    .hud button:active {
+      transform: scale(0.88);
+    }
+
+    .hud button:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    /* Button press feedback animation */
+    @keyframes buttonPress {
+      0% {
+        transform: scale(1);
+        background: rgba(255, 255, 255, 0.2);
+      }
+
+      50% {
+        transform: scale(0.92);
+        background: rgba(100, 255, 150, 0.5);
+      }
+
+      100% {
+        transform: scale(1);
+        background: rgba(255, 255, 255, 0.2);
+      }
+    }
+
+    .hud button.pressed {
+      animation: buttonPress 0.3s ease-out;
+    }
+
+    /* Watermark styling */
+    .watermark {
+      position: absolute;
+      bottom: 12px;
+      right: 15px;
+      font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      pointer-events: none;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      z-index: 100;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+
+    .hint-container {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 20;
+      opacity: 0;
+      transition: opacity 1s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .hint-container.visible {
+      opacity: 1;
+    }
+
+    .hand-icon {
+      font-size: 60px;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+      animation: handMove 2s infinite ease-in-out;
+      display: inline-block;
+      /* Important for transform to work */
+    }
+
+    @keyframes handMove {
+
+      0%,
+      100% {
+        transform: translateY(0) rotate(-10deg);
+      }
+
+      50% {
+        transform: translateY(-20px) rotate(10deg);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="c"></canvas>
+
+  <div class="hud">
+    <div class="grp">
+      <button id="spdMinus" title="Slower">🐢</button>
+      <button id="spdPlus" title="Faster">🐇</button>
+    </div>
+
+    <div style="width:2px; height:30px; background:rgba(255,255,255,0.2); margin:0 4px;"></div>
+
+    <div class="grp">
+      <button id="cntMinus" title="Less Fish">🐟</button>
+      <button id="cntPlus" title="More Fish">🎏</button>
+    </div>
+
+    <div style="width:2px; height:30px; background:rgba(255,255,255,0.2); margin:0 4px;"></div>
+
+    <button id="snd" title="Toggle Sound">🔇</button>
+  </div>
+
+  <div class="watermark">A fun toy for kids, crafted by Jason Li</div>
+
+  <div class="hint-container" id="hint">
+    <div class="hand-icon">👆</div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d', { alpha: false });
+
+      // ---------- Utilities ----------
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const clamp01 = v => clamp(v, 0, 1);
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const rand = (a, b) => a + Math.random() * (b - a);
+      const randInt = (a, b) => Math.floor(rand(a, b + 1));
+      const easeOut = t => 1 - Math.pow(1 - t, 3);
+      const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+      // Cheap deterministic noise
+      function hash2(x, y) {
+        const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+        return s - Math.floor(s);
+      }
+      function smoothstep(t) { return t * t * (3 - 2 * t); }
+      function valueNoise(x, y) {
+        const xi = Math.floor(x), yi = Math.floor(y);
+        const xf = x - xi, yf = y - yi;
+        const a = hash2(xi, yi), b = hash2(xi + 1, yi);
+        const c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+        const u = smoothstep(xf), v = smoothstep(yf);
+        return lerp(lerp(a, b, u), lerp(c, d, u), v);
+      }
+      function fbm(x, y) {
+        let f = 0, amp = 0.5, freq = 1;
+        for (let i = 0; i < 4; i++) {
+          f += amp * valueNoise(x * freq, y * freq);
+          amp *= 0.5; freq *= 2;
+        }
+        return f;
+      }
+
+      // ---------- Resize / DPR ----------
+      let W = innerWidth, H = innerHeight, DPR = 1;
+      function resize() {
+        DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        W = innerWidth; H = innerHeight;
+        canvas.width = Math.floor(W * DPR);
+        canvas.height = Math.floor(H * DPR);
+        canvas.style.width = W + 'px';
+        canvas.style.height = H + 'px';
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        initSpatial();
+      }
+      addEventListener('resize', resize, { passive: true });
+
+      // ---------- Pointer ----------
+      const pointer = { x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, lastT: performance.now(), idle: 0 };
+      let lastPointerMove = performance.now();
+
+      addEventListener('pointermove', (e) => {
+        const now = performance.now();
+        const dt = Math.max(1, now - pointer.lastT);
+        const nx = e.clientX, ny = e.clientY;
+        pointer.vx = (nx - pointer.x) / dt;
+        pointer.vy = (ny - pointer.y) / dt;
+        pointer.x = nx; pointer.y = ny; pointer.lastT = now;
+        pointer.idle = 0;
+        lastPointerMove = now;
+        hint.classList.remove('visible'); // Hide hint when mouse moves
+        startHintTimer(); // Restart timer to show hint after 3s idle
+      }, { passive: true });
+
+      // ---------- Pointer Click Interaction ----------
+      const collectibles = [];
+      const fishFryGroups = [];
+      const collectionNotifications = [];
+
+      addEventListener('pointerdown', (e) => {
+        const cx = e.clientX, cy = e.clientY;
+        // Rainbow burst on click
+        for (let i = 0; i < 12; i++) spawnTrailParticle(cx, cy);
+
+        // Hit-test collectibles first (top interactive layer)
+        for (let i = collectibles.length - 1; i >= 0; i--) {
+          const c = collectibles[i];
+          if (c.collected) continue;
+          if (Math.hypot(cx - c.x, cy - c.y) < 36) {
+            collectItem(c);
+            playCollectSound(); // Play sound when collecting
+            return;
+          }
+        }
+        // Hit-test fish
+        let hitFish = null, hitDist = Infinity;
+        for (const f of fish) {
+          const d = Math.hypot(cx - f.x, cy - f.y);
+          const hr = f.size * (f.depthScale || 1) * 3.2;
+          if (d < hr && d < hitDist) { hitDist = d; hitFish = f; }
+        }
+        if (hitFish && !hitFish.response) {
+          triggerFishResponse(hitFish, cx, cy);
+          playBubbleSound(); // Play sound when clicking fish
+        } else {
+          triggerLocalScatter(cx, cy);
+          playClickSound(); // Play sound when clicking water
+        }
+      });
+
+      // ---------- Fish Response System (Direction A) ----------
+      const FISH_RESPONSES = ['burst', 'spin', 'shimmer', 'bubbles', 'colorflash'];
+
+      function triggerFishResponse(f, clickX, clickY) {
+        const type = FISH_RESPONSES[Math.floor(Math.random() * FISH_RESPONSES.length)];
+        const durations = { burst: 620, spin: 540, shimmer: 370, bubbles: 430, colorflash: 480 };
+        f.response = { type, startTime: performance.now(), duration: durations[type] };
+        if (type === 'burst') {
+          const dx = f.x - clickX, dy = f.y - clickY, d = Math.hypot(dx, dy) || 1;
+          f.vx += (dx / d) * 14; f.vy += (dy / d) * 14;
+          f.heading = Math.atan2(f.vy, f.vx); // snap heading to kick direction
+          spawnBubbleCluster(f.x, f.y);
+        } else if (type === 'bubbles') {
+          spawnBubbleCluster(f.x, f.y);
+        }
+        if (soundEnabled) playBubbleSound(); // Unified sound system
+      }
+
+      function triggerLocalScatter(clickX, clickY) {
+        const sr = 135;
+        for (const f of fish) {
+          const dx = f.x - clickX, dy = f.y - clickY, d = Math.hypot(dx, dy);
+          if (d < sr && d > 0.5) {
+            const force = ((sr - d) / sr) * 5;
+            f.vx += (dx / d) * force; f.vy += (dy / d) * force;
+            f.heading = Math.atan2(f.vy, f.vx); // snap heading to kick direction
+          }
+        }
+        spawnBubbleCluster(clickX, clickY);
+      }
+
+
+      // ============================================================
+      // SOUND SYSTEM - Web Audio API
+      // ============================================================
+      let audioContext = null;
+      let masterGain = null;
+      let soundEnabled = true; // Default to true for better kids experience
+
+      function initAudio() {
+        if (!audioContext) {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          masterGain = audioContext.createGain();
+          masterGain.gain.value = 4.0; // MEGA BOOST (was 1.5)
+          masterGain.connect(audioContext.destination);
+        }
+        if (audioContext.state === 'suspended') audioContext.resume();
+        return audioContext;
+      }
+
+      function playBubbleSound() {
+        if (!soundEnabled) return;
+        const ctx = initAudio();
+
+        // White noise for realistic pop
+        const bufferSize = ctx.sampleRate * 0.1;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = Math.random() * 2 - 1;
+        }
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+
+        // Bandpass filter for bubble character
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 800 + Math.random() * 400;
+        filter.Q.value = 10;
+
+        // Oscillator for tonal wobble
+        const osc = ctx.createOscillator();
+        osc.frequency.value = 600 + Math.random() * 300;
+
+        // Frequency modulation
+        const modOsc = ctx.createOscillator();
+        modOsc.frequency.value = 8 + Math.random() * 4;
+        const modGain = ctx.createGain();
+        modGain.gain.value = 50;
+        modOsc.connect(modGain);
+        modGain.connect(osc.frequency);
+
+        // Envelope - MEGA LOUD!
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(1.0, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        osc.connect(gain);
+        gain.connect(masterGain);
+
+        noise.start(ctx.currentTime);
+        noise.stop(ctx.currentTime + 0.15);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.15);
+        modOsc.start(ctx.currentTime);
+        modOsc.stop(ctx.currentTime + 0.15);
+      }
+
+      function playCollectSound() {
+        if (!soundEnabled) return;
+        const ctx = initAudio();
+
+        // Sparkle effect with multiple harmonics
+        const frequencies = [800, 1000, 1200, 1500];
+        frequencies.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.frequency.value = freq;
+          osc.type = 'sine';
+
+          const delay = i * 0.02;
+          gain.gain.setValueAtTime(0, ctx.currentTime + delay);
+          gain.gain.linearRampToValueAtTime(0.7, ctx.currentTime + delay + 0.01); // Was 0.35
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + delay + 0.25);
+
+          osc.connect(gain);
+          gain.connect(masterGain);
+          osc.start(ctx.currentTime + delay);
+          osc.stop(ctx.currentTime + delay + 0.25);
+        });
+      }
+
+      function playClickSound() {
+        if (!soundEnabled) return;
+        const ctx = initAudio();
+
+        // Water splash with filtered noise
+        const bufferSize = ctx.sampleRate * 0.05;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.exp(-i / bufferSize * 5);
+        }
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+
+        // Lowpass for muffled water sound
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 400 + Math.random() * 200;
+        filter.Q.value = 1;
+
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.8, ctx.currentTime); // Was 0.35
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(masterGain);
+        noise.start(ctx.currentTime);
+        noise.stop(ctx.currentTime + 0.08);
+      }
+
+      // ---------- HUD ----------
+      let SPEED = 0.4;
+      let targetFishCount = 1300;
+
+      // const spdVal = document.getElementById('spdVal');
+      // const cntVal = document.getElementById('cntVal');
+      function updateHud() {
+        // Visual-only now
+      }
+      updateHud();
+
+      // Button press feedback helper
+      function pressButton(btn) {
+        btn.classList.add('pressed');
+        setTimeout(() => btn.classList.remove('pressed'), 300);
+      }
+
+      const spdMinusBtn = document.getElementById('spdMinus');
+      const spdPlusBtn = document.getElementById('spdPlus');
+      const cntMinusBtn = document.getElementById('cntMinus');
+      const cntPlusBtn = document.getElementById('cntPlus');
+      const sndBtn = document.getElementById('snd');
+
+      spdMinusBtn.onclick = () => { SPEED = clamp(SPEED / 1.12, 0.25, 4.0); updateHud(); pressButton(spdMinusBtn); };
+      spdPlusBtn.onclick = () => { SPEED = clamp(SPEED * 1.12, 0.25, 4.0); updateHud(); pressButton(spdPlusBtn); };
+      cntMinusBtn.onclick = () => { targetFishCount = clamp(targetFishCount - 150, 200, 2000); updateHud(); pressButton(cntMinusBtn); };
+      cntPlusBtn.onclick = () => { targetFishCount = clamp(targetFishCount + 150, 200, 2000); updateHud(); pressButton(cntPlusBtn); };
+
+      // Sound toggle
+      sndBtn.onclick = () => {
+        soundEnabled = !soundEnabled;
+        sndBtn.textContent = soundEnabled ? '🔊' : '🔇';
+        pressButton(sndBtn);
+        playClickSound(); // Play sound when toggling
+        console.log('Sound toggled:', soundEnabled);
+      };
+
+      // ---------- Hint auto-show after idle ----------
+      const hint = document.getElementById('hint');
+      let hintTimer = null;
+      function startHintTimer() {
+        hint.classList.remove('visible'); // Hide initially
+        if (hintTimer) clearTimeout(hintTimer);
+        hintTimer = setTimeout(() => hint.classList.add('visible'), 3000); // Show after 3s idle
+      }
+      startHintTimer();
+
+      // ============================================================
+      // MIGRATION SYSTEM - Natural schooling behavior
+      // ============================================================
+      const migration = {
+        // Global migration direction (slowly drifting)
+        angle: Math.random() * Math.PI * 2,
+        targetAngle: Math.random() * Math.PI * 2,
+        strength: 0.15,
+
+        // Breathing/pulsing of the school
+        breathPhase: 0,
+        breathSpeed: 0.0008,
+
+        // Wave propagation origin
+        waveOrigin: { x: W * 0.5, y: H * 0.5 },
+        waveTime: 0,
+
+        // Speed modulation
+        speedPhase: 0,
+        speedMod: 1.0,
+
+        // School center tracking
+        centerX: W * 0.5,
+        centerY: H * 0.5,
+
+        // Flash effect when turning
+        flashIntensity: 0,
+        lastAngle: 0
+      };
+
+      // Sub-schools system
+      const subSchools = [];
+      const NUM_SUB_SCHOOLS = 4;
+
+      function initSubSchools() {
+        subSchools.length = 0;
+        for (let i = 0; i < NUM_SUB_SCHOOLS; i++) {
+          subSchools.push({
+            x: W * (0.25 + Math.random() * 0.5),
+            y: H * (0.25 + Math.random() * 0.5),
+            vx: rand(-0.3, 0.3),
+            vy: rand(-0.3, 0.3),
+            radius: rand(150, 300),
+            strength: rand(0.3, 0.6),
+            phase: rand(0, Math.PI * 2)
+          });
+        }
+      }
+
+      function updateMigration(dt, t) {
+        // Slowly drift migration direction
+        if (Math.random() < 0.001) {
+          migration.targetAngle = Math.random() * Math.PI * 2;
+        }
+
+        // Smooth angle transition
+        let angleDiff = migration.targetAngle - migration.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        migration.angle += angleDiff * 0.002 * dt * 0.06;
+
+        // Detect turning for flash effect
+        const angleChange = Math.abs(angleDiff);
+        if (angleChange > 0.3) {
+          migration.flashIntensity = Math.min(1, migration.flashIntensity + dt * 0.002);
+        } else {
+          migration.flashIntensity *= 0.98;
+        }
+
+        // Breathing phase
+        migration.breathPhase += migration.breathSpeed * dt;
+
+        // Speed modulation - organic rhythm
+        migration.speedPhase += dt * 0.0003;
+        migration.speedMod = 0.7 + 0.3 * Math.sin(migration.speedPhase) +
+          0.15 * Math.sin(migration.speedPhase * 2.3) +
+          0.1 * Math.sin(migration.speedPhase * 0.7);
+
+        // Wave propagation
+        migration.waveTime += dt * 0.002;
+
+        // Calculate school center
+        if (fish.length > 0) {
+          let cx = 0, cy = 0;
+          for (const f of fish) {
+            cx += f.x;
+            cy += f.y;
+          }
+          migration.centerX = lerp(migration.centerX, cx / fish.length, 0.02);
+          migration.centerY = lerp(migration.centerY, cy / fish.length, 0.02);
+          migration.waveOrigin.x = migration.centerX;
+          migration.waveOrigin.y = migration.centerY;
+        }
+
+        // Update sub-schools
+        for (const sub of subSchools) {
+          sub.phase += dt * 0.001;
+
+          // Gentle wandering
+          sub.vx += (Math.random() - 0.5) * 0.02;
+          sub.vy += (Math.random() - 0.5) * 0.02;
+          sub.vx *= 0.99;
+          sub.vy *= 0.99;
+
+          // Follow global migration
+          sub.vx += Math.cos(migration.angle) * 0.01;
+          sub.vy += Math.sin(migration.angle) * 0.01;
+
+          sub.x += sub.vx * dt * 0.05;
+          sub.y += sub.vy * dt * 0.05;
+
+          // Keep on screen
+          if (sub.x < W * 0.1) sub.vx += 0.05;
+          if (sub.x > W * 0.9) sub.vx -= 0.05;
+          if (sub.y < H * 0.1) sub.vy += 0.05;
+          if (sub.y > H * 0.9) sub.vy -= 0.05;
+
+          // Breathing radius
+          sub.radius = (180 + 80 * Math.sin(sub.phase)) * (0.8 + 0.4 * Math.sin(migration.breathPhase + sub.phase));
+        }
+      }
+
+      function getMigrationForce(f, t) {
+        let fx = 0, fy = 0;
+
+        // Global migration direction - reduced to not compete with mouse
+        fx += Math.cos(migration.angle) * migration.strength * 0.3;
+        fy += Math.sin(migration.angle) * migration.strength * 0.3;
+
+        // Wave propagation effect - subtle
+        const distFromOrigin = Math.hypot(f.x - migration.waveOrigin.x, f.y - migration.waveOrigin.y);
+        const wavePhase = distFromOrigin * 0.008 - migration.waveTime;
+        const waveEffect = Math.sin(wavePhase) * 0.06;
+        fx += Math.cos(migration.angle + Math.PI * 0.5) * waveEffect;
+        fy += Math.sin(migration.angle + Math.PI * 0.5) * waveEffect;
+
+        // Breathing - very subtle
+        const breathEffect = Math.sin(migration.breathPhase) * 0.04;
+        const toCenterX = migration.centerX - f.x;
+        const toCenterY = migration.centerY - f.y;
+        const distToCenter = Math.hypot(toCenterX, toCenterY) + 1;
+        fx -= (toCenterX / distToCenter) * breathEffect;
+        fy -= (toCenterY / distToCenter) * breathEffect;
+
+        // Sub-school attraction - very weak, just for visual interest
+        let nearestSub = null;
+        let nearestDist = Infinity;
+        for (const sub of subSchools) {
+          const d = Math.hypot(f.x - sub.x, f.y - sub.y);
+          if (d < sub.radius && d < nearestDist) {
+            nearestDist = d;
+            nearestSub = sub;
+          }
+        }
+        if (nearestSub) {
+          const pull = (1 - nearestDist / nearestSub.radius) * nearestSub.strength * 0.1;
+          fx += (nearestSub.x - f.x) / (nearestDist + 1) * pull;
+          fy += (nearestSub.y - f.y) / (nearestDist + 1) * pull;
+        }
+
+        // Edge fish - minimal independence
+        const edgeFactor = Math.min(1, distToCenter / 250);
+        const independence = edgeFactor * 0.05;
+        fx += (Math.random() - 0.5) * independence;
+        fy += (Math.random() - 0.5) * independence;
+
+        return { fx, fy, speedMod: migration.speedMod };
+      }
+
+      // ============================================================
+      // DEPTH LAYERS - Foreground and background fish groups
+      // ============================================================
+      function assignDepthLayer(f) {
+        // 15% foreground (closer, larger, more vivid)
+        // 70% midground (normal)
+        // 15% background (farther, smaller, more faded)
+        const r = Math.random();
+        if (r < 0.15) {
+          f.depthLayer = 'foreground';
+          f.depthScale = rand(1.15, 1.35);
+          f.depthAlpha = rand(1.0, 1.0);
+        } else if (r < 0.85) {
+          f.depthLayer = 'midground';
+          f.depthScale = rand(0.9, 1.1);
+          f.depthAlpha = rand(0.85, 1.0);
+        } else {
+          f.depthLayer = 'background';
+          f.depthScale = rand(0.6, 0.8);
+          f.depthAlpha = rand(0.4, 0.65);
+        }
+      }
+
+      // ============================================================
+      // MEGAFAUNA SYSTEM (Distant Large Marine Life)
+      // Whales, Dolphins, Sea Turtles, Manta Rays passing in background
+      // ============================================================
+      const megafauna = [];
+      let megafaunaTimer = 5000; // Exactly 5 seconds before first appearance
+
+      const MEGAFAUNA_TYPES = {
+        WHALE: 'whale',
+        DOLPHIN: 'dolphin',
+        TURTLE: 'turtle',
+        MANTA: 'manta',
+        WHALE_GIANT: 'whaleGiant'
+      };
+
+      function createMegafauna() {
+        // 15% chance for a MASSIVE creature (half-screen size)
+        const isMassive = Math.random() < 0.15;
+
+        // Speed multiplied by 5x from original values
+        const types = isMassive ? [
+          // MASSIVE versions - speed x5 (original was 0.06-0.12, now 0.30-0.60)
+          { type: MEGAFAUNA_TYPES.WHALE_GIANT, weight: 50, size: [1500, 2500], speed: [0.30, 0.60] },
+          { type: MEGAFAUNA_TYPES.MANTA, weight: 30, size: [1200, 1800], speed: [0.40, 0.75] },
+          { type: MEGAFAUNA_TYPES.WHALE, weight: 20, size: [1200, 1800], speed: [0.40, 0.70] }
+        ] : [
+          // Regular large versions - speed x5
+          { type: MEGAFAUNA_TYPES.WHALE, weight: 25, size: [600, 1200], speed: [0.60, 1.10] },
+          { type: MEGAFAUNA_TYPES.DOLPHIN, weight: 35, size: [280, 550], speed: [1.25, 2.10] },
+          { type: MEGAFAUNA_TYPES.TURTLE, weight: 20, size: [220, 450], speed: [0.50, 0.90] },
+          { type: MEGAFAUNA_TYPES.MANTA, weight: 20, size: [450, 900], speed: [0.70, 1.30] }
+        ];
+
+        // Weighted random selection
+        const total = types.reduce((s, t) => s + t.weight, 0);
+        let r = Math.random() * total;
+        let selected = types[0];
+        for (const t of types) {
+          r -= t.weight;
+          if (r <= 0) { selected = t; break; }
+        }
+
+        // Spawn from edge, move across screen
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const startX = side < 0 ? -selected.size[1] : W + selected.size[1];
+        const endX = side < 0 ? W + selected.size[1] : -selected.size[1];
+        const y = rand(H * 0.15, H * 0.80);
+
+        // Slight vertical movement
+        const yDrift = rand(-0.25, 0.25);
+
+        return {
+          type: selected.type,
+          x: startX,
+          y: y,
+          targetX: endX,
+          size: rand(selected.size[0], selected.size[1]),
+          speed: rand(selected.speed[0], selected.speed[1]),
+          direction: -side,
+          yDrift: yDrift,
+          phase: rand(0, Math.PI * 2),
+          alpha: isMassive ? rand(0.08, 0.15) : rand(0.12, 0.22),
+          depth: rand(0.3, 0.5),
+          isMassive: isMassive,
+          attractRadius: isMassive ? rand(500, 800) : rand(350, 550),
+          attractStrength: isMassive ? rand(0.25, 0.45) : rand(0.18, 0.35)
+        };
+      }
+
+      function updateMegafauna(dt) {
+        // Spawn timer - frequent spawning
+        megafaunaTimer -= dt;
+        if (megafaunaTimer <= 0 && megafauna.length < 5) {
+          megafauna.push(createMegafauna());
+          megafaunaTimer = rand(3000, 8000); // Spawn every 3-8 seconds
+        }
+
+        // Update positions
+        for (let i = megafauna.length - 1; i >= 0; i--) {
+          const m = megafauna[i];
+          m.x += m.direction * m.speed * dt * 0.06;
+          m.y += m.yDrift * dt * 0.02;
+          m.phase += dt * 0.003;
+
+          // Remove when off screen
+          const offScreen = m.direction > 0 ? m.x > W + m.size * 2 : m.x < -m.size * 2;
+          if (offScreen) {
+            megafauna.splice(i, 1);
+          }
+        }
+      }
+
+      function getMegafaunaForce(f) {
+        let fx = 0, fy = 0;
+
+        for (const m of megafauna) {
+          const dx = m.x - f.x;
+          const dy = m.y - f.y;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < m.attractRadius && dist > 30) {
+            // Gentle attraction/curiosity toward the megafauna
+            const falloff = 1 - (dist / m.attractRadius);
+            const strength = falloff * m.attractStrength * 0.5;
+            fx += (dx / dist) * strength;
+            fy += (dy / dist) * strength;
+          }
+        }
+
+        return { fx, fy };
+      }
+
+      function drawMegafauna(t) {
+        ctx.save();
+
+        for (const m of megafauna) {
+          ctx.globalAlpha = m.alpha;
+
+          const x = m.x;
+          const y = m.y + Math.sin(m.phase) * 8; // Gentle bobbing
+          const s = m.size;
+          const dir = m.direction;
+
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.scale(dir, 1); // Flip based on direction
+
+          // Deep blue-gray silhouette color
+          const baseColor = `rgba(40, 60, 80, 1)`;
+          ctx.fillStyle = baseColor;
+          ctx.strokeStyle = 'rgba(60, 85, 110, 0.5)';
+          ctx.lineWidth = 2;
+
+          switch (m.type) {
+            case MEGAFAUNA_TYPES.WHALE:
+            case MEGAFAUNA_TYPES.WHALE_GIANT:
+              drawWhale(ctx, s, t, m.phase, m.type === MEGAFAUNA_TYPES.WHALE_GIANT);
+              break;
+            case MEGAFAUNA_TYPES.DOLPHIN:
+              drawDolphin(ctx, s, t, m.phase);
+              break;
+            case MEGAFAUNA_TYPES.TURTLE:
+              drawTurtle(ctx, s, t, m.phase);
+              break;
+            case MEGAFAUNA_TYPES.MANTA:
+              drawManta(ctx, s, t, m.phase);
+              break;
+          }
+
+          ctx.restore();
+        }
+
+        ctx.restore();
+      }
+
+      function drawWhale(ctx, s, t, phase, isGiant = false) {
+        const bodyWave = Math.sin(phase * 0.5) * 0.03;
+
+        ctx.beginPath();
+        // Main body - slightly more detailed for giant
+        ctx.moveTo(s * 0.5, 0); // Nose
+        ctx.quadraticCurveTo(s * 0.4, -s * 0.18, s * 0.1, -s * 0.22);
+        ctx.quadraticCurveTo(-s * 0.2, -s * 0.25, -s * 0.4, -s * 0.15);
+        // Tail section
+        ctx.quadraticCurveTo(-s * 0.5, -s * 0.08, -s * 0.55, 0);
+        // Tail flukes
+        ctx.lineTo(-s * 0.7, -s * 0.15 + bodyWave * s);
+        ctx.lineTo(-s * 0.6, 0);
+        ctx.lineTo(-s * 0.7, s * 0.15 + bodyWave * s);
+        ctx.lineTo(-s * 0.55, 0);
+        // Bottom curve
+        ctx.quadraticCurveTo(-s * 0.5, s * 0.08, -s * 0.4, s * 0.12);
+        ctx.quadraticCurveTo(-s * 0.1, s * 0.2, s * 0.2, s * 0.15);
+        ctx.quadraticCurveTo(s * 0.4, s * 0.1, s * 0.5, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        // Pectoral fin
+        ctx.beginPath();
+        ctx.moveTo(s * 0.1, s * 0.12);
+        ctx.quadraticCurveTo(s * 0.05, s * 0.28, -s * 0.12, s * 0.22);
+        ctx.quadraticCurveTo(-s * 0.02, s * 0.15, s * 0.08, s * 0.11);
+        ctx.fill();
+
+        // Giant whale has more details - belly grooves
+        if (isGiant) {
+          ctx.strokeStyle = 'rgba(30, 50, 70, 0.4)';
+          ctx.lineWidth = s * 0.008;
+          for (let i = 0; i < 8; i++) {
+            const startX = s * 0.3 - i * s * 0.06;
+            ctx.beginPath();
+            ctx.moveTo(startX, s * 0.08);
+            ctx.quadraticCurveTo(startX - s * 0.05, s * 0.14, startX - s * 0.1, s * 0.10);
+            ctx.stroke();
+          }
+
+          // Dorsal hump
+          ctx.fillStyle = 'rgba(35, 55, 75, 1)';
+          ctx.beginPath();
+          ctx.moveTo(-s * 0.35, -s * 0.14);
+          ctx.quadraticCurveTo(-s * 0.38, -s * 0.19, -s * 0.42, -s * 0.14);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      function drawDolphin(ctx, s, t, phase) {
+        const bodyWave = Math.sin(phase * 0.8) * 0.05;
+
+        ctx.beginPath();
+        // Elongated snout
+        ctx.moveTo(s * 0.55, 0);
+        ctx.quadraticCurveTo(s * 0.45, -s * 0.08, s * 0.3, -s * 0.15);
+        // Dorsal hump with fin
+        ctx.quadraticCurveTo(s * 0.1, -s * 0.22, -s * 0.05, -s * 0.18);
+        // Dorsal fin
+        ctx.lineTo(-s * 0.02, -s * 0.35);
+        ctx.quadraticCurveTo(-s * 0.12, -s * 0.25, -s * 0.18, -s * 0.16);
+        // Back to tail
+        ctx.quadraticCurveTo(-s * 0.35, -s * 0.12, -s * 0.45, -s * 0.05);
+        // Tail flukes
+        ctx.lineTo(-s * 0.58, -s * 0.18 + bodyWave * s);
+        ctx.lineTo(-s * 0.5, 0);
+        ctx.lineTo(-s * 0.58, s * 0.18 + bodyWave * s);
+        ctx.lineTo(-s * 0.45, s * 0.05);
+        // Belly
+        ctx.quadraticCurveTo(-s * 0.2, s * 0.12, s * 0.1, s * 0.1);
+        ctx.quadraticCurveTo(s * 0.35, s * 0.06, s * 0.55, 0);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      function drawTurtle(ctx, s, t, phase) {
+        const flipperPhase = Math.sin(phase * 0.6);
+
+        // Shell
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s * 0.4, s * 0.32, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Head
+        ctx.beginPath();
+        ctx.ellipse(s * 0.45, -s * 0.02, s * 0.12, s * 0.09, 0.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Front flippers
+        ctx.save();
+        ctx.translate(s * 0.15, -s * 0.25);
+        ctx.rotate(-0.4 + flipperPhase * 0.3);
+        ctx.beginPath();
+        ctx.ellipse(0, -s * 0.15, s * 0.08, s * 0.22, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(s * 0.15, s * 0.25);
+        ctx.rotate(0.4 - flipperPhase * 0.3);
+        ctx.beginPath();
+        ctx.ellipse(0, s * 0.15, s * 0.08, s * 0.22, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Back flippers
+        ctx.beginPath();
+        ctx.ellipse(-s * 0.32, -s * 0.2, s * 0.06, s * 0.12, 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(-s * 0.32, s * 0.2, s * 0.06, s * 0.12, -0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function drawManta(ctx, s, t, phase) {
+        const wingFlap = Math.sin(phase * 0.4) * 0.15;
+
+        ctx.beginPath();
+        // Body center
+        ctx.moveTo(s * 0.4, 0);
+        // Right wing
+        ctx.quadraticCurveTo(s * 0.3, -s * 0.15, s * 0.1, -s * 0.25 - wingFlap * s);
+        ctx.quadraticCurveTo(-s * 0.15, -s * 0.5 - wingFlap * s * 1.5, -s * 0.35, -s * 0.35 - wingFlap * s);
+        ctx.quadraticCurveTo(-s * 0.4, -s * 0.2, -s * 0.45, 0);
+        // Tail
+        ctx.lineTo(-s * 0.7, 0);
+        ctx.lineTo(-s * 0.45, 0);
+        // Left wing
+        ctx.quadraticCurveTo(-s * 0.4, s * 0.2, -s * 0.35, s * 0.35 + wingFlap * s);
+        ctx.quadraticCurveTo(-s * 0.15, s * 0.5 + wingFlap * s * 1.5, s * 0.1, s * 0.25 + wingFlap * s);
+        ctx.quadraticCurveTo(s * 0.3, s * 0.15, s * 0.4, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        // Cephalic fins (horn-like)
+        ctx.beginPath();
+        ctx.moveTo(s * 0.35, -s * 0.08);
+        ctx.quadraticCurveTo(s * 0.5, -s * 0.15, s * 0.45, -s * 0.05);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(s * 0.35, s * 0.08);
+        ctx.quadraticCurveTo(s * 0.5, s * 0.15, s * 0.45, s * 0.05);
+        ctx.fill();
+      }
+
+      // ============================================================
+      // PREDATOR SYSTEM (Direction E: Predator Chase)
+      // Giant shark shadow → fish panic scatter →
+      // cursor light wave drives it away → fish regroup
+      // ============================================================
+      const predator = {
+        active: false,
+        timer: rand(35000, 55000), // first shark 35-55 s after start
+        shark: null,
+        lightWaves: [],
+        victoryFlash: 0
+      };
+
+      function spawnPredator() {
+        const side = randInt(0, 3); // 0=left 1=right 2=top 3=bottom
+        let sx, sy, entryDx, entryDy;
+        if (side === 0) { sx = -150; sy = rand(H * 0.22, H * 0.78); entryDx = 1; entryDy = 0; }
+        else if (side === 1) { sx = W + 150; sy = rand(H * 0.22, H * 0.78); entryDx = -1; entryDy = 0; }
+        else if (side === 2) { sx = rand(W * 0.22, W * 0.78); sy = -110; entryDx = 0; entryDy = 1; }
+        else { sx = rand(W * 0.22, W * 0.78); sy = H + 110; entryDx = 0; entryDy = -1; }
+
+        const penetration = rand(220, 400);
+        predator.shark = {
+          x: sx, y: sy,
+          entryDx, entryDy,
+          targetX: sx + entryDx * penetration,
+          targetY: sy + entryDy * penetration,
+          life: 0,
+          maxLife: 8000,       // auto-leave after 8 s
+          fleeMeter: 0,        // 0→1; filled by light wave; triggers flee at 1
+          fleeing: false,
+          fleeProgress: 0,     // 0→1 exit animation
+          phase: rand(0, Math.PI * 2),
+          entryProgress: 0     // 0→1 ramp-in over 1.4 s
+        };
+        predator.active = true;
+        events.flashTimer = 520; // edge flash to signal threat
+        if (soundOn && audio) audio.predatorApproach();
+      }
+
+      function updatePredator(dt) {
+        if (predator.victoryFlash > 0) predator.victoryFlash -= dt;
+
+        if (!predator.active) {
+          if (events.active && events.active.length > 0) return; // gate: no spawn during big events
+          predator.timer -= dt;
+          if (predator.timer <= 0) { spawnPredator(); predator.timer = rand(35000, 55000); }
+          return;
+        }
+
+        const s = predator.shark;
+        s.life += dt;
+        s.phase += dt * 0.005;
+        if (s.entryProgress < 1) s.entryProgress = Math.min(1, s.entryProgress + dt / 1400);
+
+        if (!s.fleeing) {
+          // Slow prowl toward target
+          const ddx = s.targetX - s.x, ddy = s.targetY - s.y;
+          const dd = Math.hypot(ddx, ddy);
+          if (dd > 4) {
+            const spd = 0.22 * s.entryProgress;
+            s.x += (ddx / dd) * spd * dt * 0.06;
+            s.y += (ddy / dd) * spd * dt * 0.06;
+          }
+          // Light-wave: cursor near shark → rings + flee meter
+          const curDist = Math.hypot(pointer.x - s.x, pointer.y - s.y);
+          const waveRange = 250;
+          if (curDist < waveRange && s.entryProgress > 0.45) {
+            if (Math.random() < dt * 0.0038)
+              predator.lightWaves.push({ x: pointer.x, y: pointer.y, r: 0, life: 0, maxLife: 680 });
+            const prox = 1 - curDist / waveRange;
+            s.fleeMeter += prox * prox * dt * 0.00042;
+          }
+          // Trigger flee
+          if (s.fleeMeter >= 1 || s.life >= s.maxLife) {
+            s.fleeing = true; s.fleeProgress = 0;
+            if (s.fleeMeter >= 1) {
+              predator.victoryFlash = 720;
+              if (soundOn && audio) audio.predatorVictory();
+            }
+          }
+        } else {
+          // Flee: accelerate back toward the edge
+          s.fleeProgress = Math.min(1, s.fleeProgress + dt / 820);
+          const acc = s.fleeProgress * s.fleeProgress;
+          s.x -= s.entryDx * acc * 0.42 * dt * 0.06;
+          s.y -= s.entryDy * acc * 0.42 * dt * 0.06;
+          if (s.fleeProgress >= 1) { predator.active = false; predator.shark = null; }
+        }
+
+        // Light-wave ring lifecycle
+        for (let i = predator.lightWaves.length - 1; i >= 0; i--) {
+          const w = predator.lightWaves[i];
+          w.life += dt;
+          w.r = (w.life / w.maxLife) * 170;
+          if (w.life >= w.maxLife) predator.lightWaves.splice(i, 1);
+        }
+      }
+
+      // Repulsion force on a single fish when predator is active
+      function getPredatorForce(f) {
+        if (!predator.active || !predator.shark) return { fx: 0, fy: 0 };
+        const s = predator.shark;
+        let fadeScale = 1;
+        if (s.fleeing) {
+          fadeScale = Math.max(0, 1 - s.fleeProgress * 2.6);
+          if (fadeScale <= 0) return { fx: 0, fy: 0 };
+        }
+        const dx = f.x - s.x, dy = f.y - s.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const screenDiag = Math.max(W, H) * 0.78;
+        // Long-range: gentle whole-school push
+        const longFalloff = Math.max(0, 1 - dist / screenDiag);
+        // Short-range: strong panic burst (quadratic)
+        const shortRange = 400;
+        const shortStr = dist < shortRange ? Math.pow(1 - dist / shortRange, 2) * 6.2 : 0;
+        const strength = (longFalloff * 1.7 + shortStr) * fadeScale;
+        // Per-fish chaotic noise
+        const nx = ((f.hueSeed * 7.13 + f.size) % 1 - 0.5) * 1.5;
+        const ny = ((f.hueSeed * 4.67 + f.phase * 0.0002) % 1 - 0.5) * 1.5;
+        return {
+          fx: (dx / dist) * strength + nx * fadeScale,
+          fy: (dy / dist) * strength + ny * fadeScale
+        };
+      }
+
+      function drawPredator() {
+        if (!predator.active || !predator.shark) return;
+        const s = predator.shark;
+        const entryA = Math.min(1, s.entryProgress);
+        const fleeA = s.fleeing ? Math.max(0, 1 - s.fleeProgress * 1.9) : 1;
+        const alpha = entryA * fleeA;
+        if (alpha < 0.004) return;
+
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        const faceAngle = s.fleeing
+          ? Math.atan2(-s.entryDy, -s.entryDx)
+          : Math.atan2(s.entryDy, s.entryDx);
+        ctx.rotate(faceAngle + Math.sin(s.phase) * 0.07);
+
+        const sz = 158;
+        const bw = Math.sin(s.phase * 1.9) * 0.035;
+
+        // Threat glow (screen blend, dark red undertone)
+        ctx.globalCompositeOperation = 'screen';
+        const pulse = 0.84 + 0.16 * Math.sin(s.phase * 2.3);
+        const gg = ctx.createRadialGradient(0, 0, 28, 0, 0, 310 * pulse);
+        gg.addColorStop(0, `rgba(65, 28, 42, ${alpha * 0.24})`);
+        gg.addColorStop(0.42, `rgba(38, 18, 34, ${alpha * 0.11})`);
+        gg.addColorStop(1, `rgba(14,  9, 22, 0)`);
+        ctx.fillStyle = gg;
+        ctx.beginPath(); ctx.arc(0, 0, 310 * pulse, 0, Math.PI * 2); ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+
+        // Shark silhouette
+        ctx.globalAlpha = alpha * 0.40;
+        ctx.fillStyle = 'rgba(10, 14, 24, 1)';
+
+        // Body — sleek torpedo
+        ctx.beginPath();
+        ctx.moveTo(sz * 1.06, 0);
+        ctx.quadraticCurveTo(sz * 0.78, -sz * 0.17, sz * 0.36, -sz * 0.30 + bw * sz);
+        ctx.quadraticCurveTo(sz * 0.02, -sz * 0.29 + bw * sz * 0.65, -sz * 0.42, -sz * 0.20);
+        ctx.quadraticCurveTo(-sz * 0.70, -sz * 0.09, -sz * 0.82, 0);
+        ctx.quadraticCurveTo(-sz * 0.70, sz * 0.09, -sz * 0.42, sz * 0.20);
+        ctx.quadraticCurveTo(sz * 0.02, sz * 0.29 + bw * sz * 0.65, sz * 0.36, sz * 0.30 + bw * sz);
+        ctx.quadraticCurveTo(sz * 0.78, sz * 0.17, sz * 1.06, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        // Dorsal fin
+        ctx.beginPath();
+        ctx.moveTo(sz * 0.13, -sz * 0.27 + bw * sz * 0.5);
+        ctx.lineTo(sz * -0.03, -sz * 0.60);
+        ctx.lineTo(-sz * 0.22, -sz * 0.24);
+        ctx.closePath();
+        ctx.fill();
+
+        // Tail fins (forked)
+        ctx.beginPath();
+        ctx.moveTo(-sz * 0.78, -sz * 0.05);
+        ctx.quadraticCurveTo(-sz * 0.90, -sz * 0.17, -sz * 1.10, -sz * 0.32 + bw * sz * 0.9);
+        ctx.lineTo(-sz * 0.86, 0);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-sz * 0.78, sz * 0.05);
+        ctx.quadraticCurveTo(-sz * 0.90, sz * 0.17, -sz * 1.10, sz * 0.32 + bw * sz * 0.9);
+        ctx.lineTo(-sz * 0.86, 0);
+        ctx.closePath(); ctx.fill();
+
+        // Pectoral fin
+        ctx.beginPath();
+        ctx.moveTo(sz * 0.30, sz * 0.21);
+        ctx.lineTo(sz * 0.02, sz * 0.48);
+        ctx.lineTo(-sz * 0.16, sz * 0.23);
+        ctx.closePath(); ctx.fill();
+
+        ctx.restore();
+      }
+
+      function drawPredatorWaves() {
+        // Expanding light-wave rings
+        for (const w of predator.lightWaves) {
+          const p = w.life / w.maxLife;
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = (1 - p) * 0.52;
+          ctx.strokeStyle = 'rgba(195, 238, 255, 1)';
+          ctx.lineWidth = 2.6 * (1 - p * 0.55);
+          ctx.beginPath(); ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+        }
+        // Victory flash when shark driven away by player
+        if (predator.victoryFlash > 0) {
+          const vp = 1 - predator.victoryFlash / 720;
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = (1 - vp) * 0.24;
+          ctx.fillStyle = 'rgba(185, 235, 255, 1)';
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+        }
+      }
+
+      // ============================================================
+      // EVENT DIRECTOR SYSTEM
+      // ============================================================
+      const events = {
+        active: [],
+        cooldown: 0,
+        lastEventTime: 0,
+        flashTimer: 0
+      };
+
+      const EVENT_TYPES = {
+        VORTEX: 'vortex',
+        PRESSURE_WAVE: 'pressureWave',
+        MIGRATION: 'migration',
+        DEPTH_SHIFT: 'depthShift',
+        SPLIT: 'split'
+      };
+
+      function createEvent(type) {
+        const base = {
+          type,
+          life: 0,
+          maxLife: 0,
+          phase: 0, // 0=rising, 1=active, 2=fading
+          x: 0, y: 0
+        };
+
+        switch (type) {
+          case EVENT_TYPES.VORTEX:
+            return {
+              ...base,
+              x: rand(W * 0.2, W * 0.8),
+              y: rand(H * 0.2, H * 0.8),
+              maxLife: rand(4000, 7000),
+              radius: rand(180, 320),
+              strength: rand(0.6, 1.2),
+              direction: Math.random() < 0.5 ? 1 : -1, // CW or CCW
+              riseTime: 800,
+              fadeTime: 1200
+            };
+
+          case EVENT_TYPES.PRESSURE_WAVE:
+            // Starts from edge, expands inward like a predator passing
+            const side = randInt(0, 3);
+            let px, py, pdx, pdy;
+            if (side === 0) { px = -100; py = rand(H * 0.2, H * 0.8); pdx = 1; pdy = 0; }
+            else if (side === 1) { px = W + 100; py = rand(H * 0.2, H * 0.8); pdx = -1; pdy = 0; }
+            else if (side === 2) { px = rand(W * 0.2, W * 0.8); py = -100; pdx = 0; pdy = 1; }
+            else { px = rand(W * 0.2, W * 0.8); py = H + 100; pdx = 0; pdy = -1; }
+            return {
+              ...base,
+              x: px, y: py,
+              dx: pdx, dy: pdy,
+              speed: rand(0.4, 0.7),
+              maxLife: rand(3500, 5500),
+              radius: rand(150, 250),
+              strength: rand(1.5, 2.5),
+              compressionPhase: 0 // 0-1, fish scatter then regroup
+            };
+
+          case EVENT_TYPES.MIGRATION:
+            // Whole school gets a directional impulse
+            const angle = rand(0, Math.PI * 2);
+            return {
+              ...base,
+              maxLife: rand(2500, 4500),
+              angle,
+              dx: Math.cos(angle),
+              dy: Math.sin(angle),
+              strength: rand(0.4, 0.8),
+              riseTime: 600,
+              fadeTime: 800
+            };
+
+          case EVENT_TYPES.DEPTH_SHIFT:
+            // Vertical movement - school rises or sinks
+            const goUp = Math.random() < 0.5;
+            return {
+              ...base,
+              maxLife: rand(3000, 5000),
+              direction: goUp ? -1 : 1,
+              strength: rand(0.5, 0.9),
+              riseTime: 500,
+              fadeTime: 1000
+            };
+
+          case EVENT_TYPES.SPLIT:
+            // School splits into sub-groups
+            return {
+              ...base,
+              maxLife: rand(5000, 8000),
+              centers: [
+                { x: W * 0.3 + rand(-80, 80), y: H * 0.4 + rand(-60, 60) },
+                { x: W * 0.7 + rand(-80, 80), y: H * 0.6 + rand(-60, 60) }
+              ],
+              strength: rand(0.3, 0.6),
+              riseTime: 1000,
+              fadeTime: 1500
+            };
+        }
+        return base;
+      }
+
+      function updateEventDirector(dt, t) {
+        events.cooldown = Math.max(0, events.cooldown - dt);
+        if (events.flashTimer > 0) events.flashTimer -= dt;
+
+        // Idle detection - trigger event if user hasn't moved for 8+ seconds
+        pointer.idle += dt;
+        const idleTrigger = pointer.idle > 5000 && events.active.length === 0 && events.cooldown <= 0;
+
+        // Random event trigger (every 15-25 seconds)
+        const timeSinceLastEvent = t - events.lastEventTime;
+        const shouldTrigger = ((timeSinceLastEvent > rand(15000, 25000) && events.active.length < 2 && events.cooldown <= 0) || idleTrigger) && !predator.active;
+
+        if (shouldTrigger) {
+          // Pick random event type with weights
+          const weights = [
+            { type: EVENT_TYPES.VORTEX, w: 30 },
+            { type: EVENT_TYPES.PRESSURE_WAVE, w: 25 },
+            { type: EVENT_TYPES.MIGRATION, w: 20 },
+            { type: EVENT_TYPES.DEPTH_SHIFT, w: 15 },
+            { type: EVENT_TYPES.SPLIT, w: 10 }
+          ];
+          const total = weights.reduce((s, w) => s + w.w, 0);
+          let r = Math.random() * total;
+          let chosen = EVENT_TYPES.VORTEX;
+          for (const w of weights) {
+            r -= w.w;
+            if (r <= 0) { chosen = w.type; break; }
+          }
+
+          events.active.push(createEvent(chosen));
+          events.lastEventTime = t;
+          events.cooldown = rand(6000, 10000);
+          events.flashTimer = 800;
+          pointer.idle = 0; // Reset idle after event
+        }
+
+        // Update active events
+        for (let i = events.active.length - 1; i >= 0; i--) {
+          const ev = events.active[i];
+          ev.life += dt;
+
+          // Calculate phase (0=rising, 1=active, 2=fading)
+          const riseTime = ev.riseTime || 800;
+          const fadeTime = ev.fadeTime || 1000;
+          const activeTime = ev.maxLife - riseTime - fadeTime;
+
+          if (ev.life < riseTime) {
+            ev.phase = 0;
+            ev.intensity = easeOut(ev.life / riseTime);
+          } else if (ev.life < riseTime + activeTime) {
+            ev.phase = 1;
+            ev.intensity = 1;
+          } else {
+            ev.phase = 2;
+            ev.intensity = 1 - easeInOut((ev.life - riseTime - activeTime) / fadeTime);
+          }
+
+          // Update position for moving events
+          if (ev.type === EVENT_TYPES.PRESSURE_WAVE) {
+            ev.x += ev.dx * ev.speed * dt;
+            ev.y += ev.dy * ev.speed * dt;
+            ev.compressionPhase = clamp01(ev.life / (ev.maxLife * 0.4));
+          }
+
+          // Remove expired events
+          if (ev.life >= ev.maxLife) {
+            events.active.splice(i, 1);
+          }
+        }
+      }
+
+      function getEventForce(f, t) {
+        let fx = 0, fy = 0;
+
+        for (const ev of events.active) {
+          const intensity = ev.intensity || 0;
+
+          switch (ev.type) {
+            case EVENT_TYPES.VORTEX: {
+              const dx = f.x - ev.x;
+              const dy = f.y - ev.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist < ev.radius && dist > 10) {
+                const falloff = 1 - (dist / ev.radius);
+                const tangentX = -dy / dist * ev.direction;
+                const tangentY = dx / dist * ev.direction;
+                // Pull slightly inward + tangential rotation
+                const pull = falloff * 0.3 * intensity * ev.strength;
+                const spin = falloff * 0.7 * intensity * ev.strength;
+                fx += (-dx / dist) * pull + tangentX * spin;
+                fy += (-dy / dist) * pull + tangentY * spin;
+              }
+              break;
+            }
+
+            case EVENT_TYPES.PRESSURE_WAVE: {
+              const dx = f.x - ev.x;
+              const dy = f.y - ev.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist < ev.radius) {
+                const falloff = 1 - (dist / ev.radius);
+                // First scatter outward, then compress back
+                const scatter = ev.compressionPhase < 0.5 ? 1 : -0.6;
+                const force = falloff * intensity * ev.strength * scatter;
+                if (dist > 1) {
+                  fx += (dx / dist) * force;
+                  fy += (dy / dist) * force;
+                }
+              }
+              break;
+            }
+
+            case EVENT_TYPES.MIGRATION: {
+              fx += ev.dx * ev.strength * intensity;
+              fy += ev.dy * ev.strength * intensity;
+              break;
+            }
+
+            case EVENT_TYPES.DEPTH_SHIFT: {
+              fy += ev.direction * ev.strength * intensity;
+              // Slight horizontal spread during vertical movement
+              fx += (Math.sin(f.x * 0.01 + t * 0.001) * 0.15) * intensity;
+              break;
+            }
+
+            case EVENT_TYPES.SPLIT: {
+              // Each fish attracted to nearest center
+              let nearestDist = Infinity;
+              let nearestDx = 0, nearestDy = 0;
+              for (const c of ev.centers) {
+                const dx = c.x - f.x;
+                const dy = c.y - f.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist < nearestDist) {
+                  nearestDist = dist;
+                  nearestDx = dx;
+                  nearestDy = dy;
+                }
+              }
+              if (nearestDist > 20) {
+                const pull = Math.min(1, 200 / nearestDist) * ev.strength * intensity;
+                fx += (nearestDx / nearestDist) * pull;
+                fy += (nearestDy / nearestDist) * pull;
+              }
+              break;
+            }
+          }
+        }
+
+        return { fx, fy };
+      }
+
+      // ============================================================
+      // FLOW PARTICLES (Thermal Plume Visualization)
+      // ============================================================
+      const flowParticles = [];
+      const MAX_FLOW_PARTICLES = 120;
+      let flowSpawnAcc = 0;
+
+      function spawnFlowParticle(x, y, vx, vy) {
+        if (flowParticles.length >= MAX_FLOW_PARTICLES) {
+          // Recycle oldest
+          const p = flowParticles.shift();
+          p.x = x + rand(-15, 15);
+          p.y = y + rand(-15, 15);
+          p.vx = vx * 0.3 + rand(-0.02, 0.02);
+          p.vy = vy * 0.3 + rand(-0.02, 0.02);
+          p.life = 0;
+          p.maxLife = rand(800, 1800);
+          p.size = rand(1.5, 3.5);
+          p.alpha = rand(0.15, 0.35);
+          flowParticles.push(p);
+        } else {
+          flowParticles.push({
+            x: x + rand(-15, 15),
+            y: y + rand(-15, 15),
+            vx: vx * 0.3 + rand(-0.02, 0.02),
+            vy: vy * 0.3 + rand(-0.02, 0.02),
+            life: 0,
+            maxLife: rand(800, 1800),
+            size: rand(1.5, 3.5),
+            alpha: rand(0.15, 0.35)
+          });
+        }
+      }
+
+      function updateFlowParticles(dt) {
+        // Spawn based on mouse velocity
+        const mv = Math.hypot(pointer.vx, pointer.vy);
+        const spawnRate = clamp(mv * 180, 0, 12); // particles per second
+        flowSpawnAcc += dt * spawnRate / 1000;
+
+        while (flowSpawnAcc >= 1) {
+          flowSpawnAcc -= 1;
+          spawnFlowParticle(pointer.x, pointer.y, pointer.vx, pointer.vy);
+        }
+
+        // Update particles
+        for (let i = flowParticles.length - 1; i >= 0; i--) {
+          const p = flowParticles[i];
+          p.life += dt;
+
+          // Flow with thermal plume dynamics
+          const dx = pointer.x - p.x;
+          const dy = pointer.y - p.y;
+          const dist = Math.hypot(dx, dy);
+          const heat = Math.exp(-dist / 300);
+
+          // Slight attraction + upward drift + noise
+          p.vx += (dx / (dist + 1)) * heat * 0.0001 * dt;
+          p.vy += (dy / (dist + 1)) * heat * 0.0001 * dt - 0.00008 * dt;
+          p.vx += (fbm(p.x * 0.01, p.y * 0.01 + performance.now() * 0.0001) - 0.5) * 0.001 * dt;
+
+          // Damping
+          p.vx *= 0.995;
+          p.vy *= 0.995;
+
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+
+          if (p.life >= p.maxLife) {
+            flowParticles.splice(i, 1);
+          }
+        }
+      }
+
+      function drawFlowParticles() {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+
+        for (const p of flowParticles) {
+          const lifeRatio = p.life / p.maxLife;
+          const fade = lifeRatio < 0.2 ? lifeRatio / 0.2 : (1 - (lifeRatio - 0.2) / 0.8);
+          const alpha = p.alpha * fade * 0.7; // More subtle
+
+          ctx.globalAlpha = alpha;
+          const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 2);
+          // Softer, more natural colors
+          gradient.addColorStop(0, 'rgba(200, 225, 240, 0.6)');
+          gradient.addColorStop(0.5, 'rgba(180, 210, 230, 0.3)');
+          gradient.addColorStop(1, 'rgba(160, 195, 220, 0)');
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size * 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // ============================================================
+      // GOD RAYS (Light Shafts from Above)
+      // ============================================================
+      const godRays = [];
+      const NUM_GOD_RAYS = 5;
+
+      function initGodRays() {
+        godRays.length = 0;
+        for (let i = 0; i < NUM_GOD_RAYS; i++) {
+          godRays.push({
+            x: rand(W * 0.1, W * 0.9),
+            width: rand(80, 200),
+            speed: rand(0.008, 0.015),
+            phase: rand(0, Math.PI * 2),
+            alpha: rand(0.03, 0.07),
+            drift: rand(-0.02, 0.02)
+          });
+        }
+      }
+
+      function drawGodRays(t) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+
+        for (const ray of godRays) {
+          // Slow horizontal drift
+          ray.x += ray.drift;
+          if (ray.x < -ray.width) ray.x = W + ray.width;
+          if (ray.x > W + ray.width) ray.x = -ray.width;
+
+          const pulse = 0.7 + 0.3 * Math.sin(t * ray.speed + ray.phase);
+          const alpha = ray.alpha * pulse;
+
+          ctx.globalAlpha = alpha;
+
+          // Tapered ray from top - more natural sunlight colors
+          const gradient = ctx.createLinearGradient(ray.x, 0, ray.x, H);
+          gradient.addColorStop(0, 'rgba(210, 230, 245, 0.4)');
+          gradient.addColorStop(0.3, 'rgba(195, 220, 240, 0.22)');
+          gradient.addColorStop(0.7, 'rgba(180, 210, 235, 0.08)');
+          gradient.addColorStop(1, 'rgba(160, 195, 225, 0)');
+
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          const topWidth = ray.width * 0.6;
+          const bottomWidth = ray.width * 1.8;
+          ctx.moveTo(ray.x - topWidth / 2, 0);
+          ctx.lineTo(ray.x + topWidth / 2, 0);
+          ctx.lineTo(ray.x + bottomWidth / 2, H);
+          ctx.lineTo(ray.x - bottomWidth / 2, H);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // ============================================================
+      // DENSITY GLOW (Glow where fish congregate)
+      // ============================================================
+      let densityCenter = { x: W / 2, y: H / 2, strength: 0 };
+
+      function updateDensityGlow() {
+        if (fish.length === 0) return;
+
+        // Calculate center of mass
+        let cx = 0, cy = 0;
+        for (const f of fish) {
+          cx += f.x;
+          cy += f.y;
+        }
+        cx /= fish.length;
+        cy /= fish.length;
+
+        // Calculate density (how clustered are fish around center)
+        let avgDist = 0;
+        for (const f of fish) {
+          avgDist += Math.hypot(f.x - cx, f.y - cy);
+        }
+        avgDist /= fish.length;
+
+        // Lower avgDist = higher density
+        const maxSpread = Math.min(W, H) * 0.4;
+        const density = clamp01(1 - avgDist / maxSpread);
+
+        // Smooth update
+        densityCenter.x = lerp(densityCenter.x, cx, 0.05);
+        densityCenter.y = lerp(densityCenter.y, cy, 0.05);
+        densityCenter.strength = lerp(densityCenter.strength, density * 0.35, 0.03);
+      }
+
+      function drawDensityGlow() {
+        if (densityCenter.strength < 0.01) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = densityCenter.strength * 0.7;
+
+        const radius = 180 + densityCenter.strength * 120;
+        const gradient = ctx.createRadialGradient(
+          densityCenter.x, densityCenter.y, 0,
+          densityCenter.x, densityCenter.y, radius
+        );
+        // More subtle, silvery glow
+        gradient.addColorStop(0, 'rgba(220, 235, 245, 0.18)');
+        gradient.addColorStop(0.4, 'rgba(200, 220, 235, 0.08)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(densityCenter.x, densityCenter.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      // Draw school flash effect when turning
+      function drawSchoolFlash() {
+        if (!migration.flashIntensity || migration.flashIntensity < 0.05) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = migration.flashIntensity * 0.15;
+
+        const gradient = ctx.createRadialGradient(
+          migration.centerX, migration.centerY, 0,
+          migration.centerX, migration.centerY, 350
+        );
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
+        gradient.addColorStop(0.5, 'rgba(220, 240, 255, 0.15)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(migration.centerX, migration.centerY, 350, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      // Draw subtle current lines showing migration direction
+      function drawCurrentLines(t) {
+        if (!migration.angle) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.04;
+        ctx.strokeStyle = 'rgba(180, 210, 235, 0.5)';
+        ctx.lineWidth = 1;
+
+        const numLines = 8;
+        const spacing = 80;
+        const lineLength = 200;
+
+        for (let i = 0; i < numLines; i++) {
+          const offset = (t * 0.03 + i * spacing) % (W + lineLength);
+          const perpAngle = migration.angle + Math.PI * 0.5;
+          const startX = offset - lineLength * 0.5;
+          const startY = H * 0.3 + Math.sin(i * 0.7) * H * 0.3;
+
+          ctx.beginPath();
+          const endX = startX + Math.cos(migration.angle) * lineLength;
+          const endY = startY + Math.sin(migration.angle) * lineLength;
+
+          const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
+          gradient.addColorStop(0, 'rgba(180, 210, 235, 0)');
+          gradient.addColorStop(0.3, 'rgba(180, 210, 235, 0.3)');
+          gradient.addColorStop(0.7, 'rgba(180, 210, 235, 0.3)');
+          gradient.addColorStop(1, 'rgba(180, 210, 235, 0)');
+          ctx.strokeStyle = gradient;
+
+          ctx.moveTo(startX, startY);
+          ctx.bezierCurveTo(
+            startX + lineLength * 0.3 * Math.cos(migration.angle),
+            startY + lineLength * 0.3 * Math.sin(migration.angle) + Math.sin(t * 0.001 + i) * 20,
+            startX + lineLength * 0.7 * Math.cos(migration.angle),
+            startY + lineLength * 0.7 * Math.sin(migration.angle) - Math.sin(t * 0.001 + i + 1) * 20,
+            endX, endY
+          );
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      // ============================================================
+      // MARINE SNOW (3 layers)
+      // ============================================================
+      const snow = [];
+      function initSnow() {
+        snow.length = 0;
+        const layers = [
+          { n: 300, z: 0.35, sp: 0.16, r: [0.5, 1.0], a: 0.10 },
+          { n: 270, z: 0.65, sp: 0.28, r: [0.7, 1.5], a: 0.14 },
+          { n: 190, z: 1.00, sp: 0.44, r: [1.0, 2.2], a: 0.18 }
+        ];
+        for (const L of layers) {
+          for (let i = 0; i < L.n; i++) {
+            snow.push({
+              x: Math.random() * W,
+              y: Math.random() * H,
+              z: L.z,
+              vy: L.sp * (0.8 + Math.random() * 0.6),
+              vx: L.sp * 0.35 * (Math.random() * 2 - 1),
+              r: rand(L.r[0], L.r[1]),
+              a: L.a
+            });
+          }
+        }
+      }
+
+      // ============================================================
+      // BUBBLES (local attractors)
+      // ============================================================
+      const bubbles = [];
+      let bubbleAcc = 0;
+
+      function spawnBubbleCluster(x, y) {
+        const count = 3 + Math.floor(Math.random() * 8);
+        const baseR = rand(6, 12);
+        for (let i = 0; i < count; i++) {
+          bubbles.push({
+            x: x + rand(-55, 55),
+            y: y + rand(-55, 55),
+            r: baseR + rand(0, 8),
+            life: 0,
+            maxLife: rand(1400, 2600),
+            strength: rand(0.75, 1.25),
+            rad: rand(120, 240),
+            wob: rand(0, 1000)
+          });
+        }
+      }
+
+      // ============================================================
+      // MICRO-SURPRISE SYSTEM (Direction D: High-Frequency Events)
+      // ============================================================
+      const microSurprises = { timer: rand(2000, 5000) };
+
+      function spawnMicroSurprise(t) {
+        // Weighted random: bubbleBurst, fishFry, starDrop, gemDrop, colorFish
+        const weights = [25, 25, 20, 20, 10];
+        let r = Math.random() * 100, chosen = 0;
+        for (let i = 0; i < weights.length; i++) { r -= weights[i]; if (r <= 0) { chosen = i; break; } }
+
+        if (chosen === 0) { // bubbleBurst — random location burst
+          spawnBubbleCluster(rand(W * 0.1, W * 0.9), rand(H * 0.2, H * 0.9));
+        } else if (chosen === 1) { // fishFry — swarm dashes across screen
+          const side = Math.random() < 0.5 ? -1 : 1;
+          fishFryGroups.push({
+            x: side < 0 ? -55 : W + 55,
+            y: rand(H * 0.15, H * 0.85),
+            direction: -side,
+            speed: rand(1.9, 3.1),
+            count: randInt(5, 12),
+            phase: rand(0, Math.PI * 2),
+            life: 0,
+            maxLife: rand(2600, 4400)
+          });
+        } else if (chosen === 2) { // starDrop — collectible star appears
+          collectibles.push({
+            type: 'star',
+            x: rand(W * 0.12, W * 0.88), y: rand(H * 0.08, H * 0.42),
+            vx: rand(-0.25, 0.25), vy: rand(0.15, 0.35),
+            phase: rand(0, Math.PI * 2), life: 0, maxLife: rand(6000, 10000),
+            collected: false, collectAnim: 0
+          });
+        } else if (chosen === 3) { // gemDrop — collectible gem drifts from top
+          collectibles.push({
+            type: 'gem',
+            x: rand(W * 0.12, W * 0.88), y: rand(-45, H * 0.15),
+            vx: rand(-0.2, 0.2), vy: rand(0.2, 0.4),
+            phase: rand(0, Math.PI * 2), life: 0, maxLife: rand(7000, 12000),
+            collected: false, collectAnim: 0
+          });
+        } else { // colorFish — one fish bursts out colorfully then returns
+          if (fish.length > 0) {
+            const f = fish[Math.floor(Math.random() * fish.length)];
+            if (!f.response) {
+              const angle = rand(0, Math.PI * 2);
+              f.response = { type: 'colorBurst', startTime: performance.now(), duration: 2300 };
+              f.vx += Math.cos(angle) * 10;
+              f.vy += Math.sin(angle) * 10;
+              f.heading = Math.atan2(f.vy, f.vx); // snap heading to burst direction
+            }
+          }
+        }
+      }
+
+      function collectItem(c) {
+        c.collected = true;
+        collectionNotifications.push({ x: c.x, y: c.y - 8, icon: c.type === 'star' ? '⭐' : '💎', life: 0, maxLife: 1100 });
+        if (soundOn && audio) audio.bubbleTick(0.65);
+      }
+
+      function updateMicroSurprises(dt, t) {
+        microSurprises.timer -= dt;
+        if (microSurprises.timer <= 0) { spawnMicroSurprise(t); microSurprises.timer = rand(5000, 8000); }
+
+        // Update fish fry groups
+        for (let i = fishFryGroups.length - 1; i >= 0; i--) {
+          const g = fishFryGroups[i];
+          g.life += dt;
+          g.x += g.direction * g.speed * dt * 0.07;
+          g.phase += dt * 0.006;
+          if (g.life >= g.maxLife) fishFryGroups.splice(i, 1);
+        }
+        // Update collectibles
+        for (let i = collectibles.length - 1; i >= 0; i--) {
+          const c = collectibles[i];
+          if (c.collected) { c.collectAnim += dt / 280; if (c.collectAnim >= 1) collectibles.splice(i, 1); continue; }
+          c.life += dt;
+          c.phase += dt * 0.0038;
+          c.x += c.vx * dt * 0.07;
+          c.y += c.vy * dt * 0.07;
+          c.x += Math.sin(c.phase * 2.2) * 0.28; // gentle horizontal sway
+          if (c.life >= c.maxLife || c.x < -70 || c.x > W + 70 || c.y > H + 70) collectibles.splice(i, 1);
+        }
+        // Update collection notifications
+        for (let i = collectionNotifications.length - 1; i >= 0; i--) {
+          collectionNotifications[i].life += dt;
+          if (collectionNotifications[i].life >= collectionNotifications[i].maxLife) collectionNotifications.splice(i, 1);
+        }
+      }
+
+      // --- Micro-surprise drawing helpers ---
+      function drawStarShape(outerR, innerR) {
+        const pts = 5;
+        ctx.beginPath();
+        for (let i = 0; i < pts * 2; i++) {
+          const a = (i * Math.PI / pts) - Math.PI / 2;
+          const r2 = i % 2 === 0 ? outerR : innerR;
+          if (i === 0) ctx.moveTo(Math.cos(a) * r2, Math.sin(a) * r2);
+          else ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
+        }
+        ctx.closePath();
+      }
+
+      function drawGemShape(size) {
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.3);
+        ctx.lineTo(size, -size * 0.2);
+        ctx.lineTo(size * 0.7, size * 0.9);
+        ctx.lineTo(-size * 0.7, size * 0.9);
+        ctx.lineTo(-size, -size * 0.2);
+        ctx.closePath();
+      }
+
+      function drawFishFry(t) {
+        for (const g of fishFryGroups) {
+          const progress = g.life / g.maxLife;
+          const alpha = Math.min(1, progress * 6) * Math.min(1, (1 - progress) * 6) * 0.82;
+          for (let i = 0; i < g.count; i++) {
+            const offY = (i - g.count * 0.5) * (11 + Math.sin(g.phase + i * 1.4) * 4.5);
+            const wobX = Math.sin(g.phase * 1.6 + i * 0.9) * 9;
+            const sz = 1.3 + Math.sin(i * 2.1 + 1.7) * 0.55;
+            ctx.save();
+            ctx.globalAlpha = alpha * (0.6 + Math.sin(g.phase + i) * 0.4);
+            ctx.translate(g.x + wobX, g.y + offY);
+            ctx.rotate((g.direction > 0 ? 0 : Math.PI) + Math.sin(g.phase * 0.85 + i) * 0.22);
+            const hue = 185 + (i * 7) % 32;
+            // Body
+            ctx.fillStyle = `hsla(${hue},64%,62%,1)`;
+            ctx.beginPath(); ctx.ellipse(0, 0, sz * 2.3, sz * 0.72, 0, 0, Math.PI * 2); ctx.fill();
+            // Tail
+            ctx.fillStyle = `hsla(${hue + 14},56%,54%,1)`;
+            ctx.beginPath();
+            ctx.moveTo(-sz * 2.1, 0);
+            ctx.lineTo(-sz * 3.3, -sz * 0.82);
+            ctx.lineTo(-sz * 3.3, sz * 0.82);
+            ctx.closePath(); ctx.fill();
+            // Eye
+            ctx.fillStyle = 'rgba(16,26,36,0.92)';
+            ctx.beginPath(); ctx.arc(sz * 1.3, -sz * 0.18, sz * 0.27, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+        }
+      }
+
+      function drawCollectibles(t) {
+        for (const c of collectibles) {
+          if (c.collected) {
+            // Pop-burst exit animation
+            const p = c.collectAnim;
+            ctx.save();
+            ctx.globalAlpha = 1 - p;
+            ctx.translate(c.x, c.y);
+            ctx.scale(1 + p * 2.0, 1 + p * 2.0);
+            if (c.type === 'star') { drawStarShape(13, 5.5); ctx.fillStyle = 'rgba(255,234,82,1)'; ctx.fill(); }
+            else { drawGemShape(10); ctx.fillStyle = 'rgba(140,208,255,1)'; ctx.fill(); }
+            // Burst particles
+            for (let i = 0; i < 7; i++) {
+              const a = (i / 7) * Math.PI * 2 + p * 3.5;
+              const pr = p * 48;
+              ctx.globalAlpha = (1 - p) * 0.55;
+              ctx.fillStyle = c.type === 'star' ? 'rgba(255,244,145,1)' : 'rgba(195,232,255,1)';
+              ctx.beginPath(); ctx.arc(Math.cos(a) * pr, Math.sin(a) * pr, 2.8 * (1 - p), 0, Math.PI * 2); ctx.fill();
+            }
+            ctx.restore();
+            continue;
+          }
+
+          const pulse = 0.82 + 0.18 * Math.sin(c.phase * 3.2);
+          const glowAlpha = 0.22 + 0.12 * Math.sin(c.phase * 2.1);
+
+          // Outer glow (screen blend)
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          const gc = c.type === 'star' ? '255,234,82' : '140,208,255';
+          const gg = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, 40 * pulse);
+          gg.addColorStop(0, `rgba(${gc},${glowAlpha})`);
+          gg.addColorStop(1, `rgba(${gc},0)`);
+          ctx.fillStyle = gg;
+          ctx.beginPath(); ctx.arc(c.x, c.y, 40 * pulse, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+
+          // Main shape
+          ctx.save();
+          ctx.translate(c.x, c.y);
+          ctx.rotate(c.phase * (c.type === 'star' ? 0.55 : 0.38));
+          ctx.scale(pulse, pulse);
+
+          if (c.type === 'star') {
+            ctx.globalAlpha = 0.95;
+            drawStarShape(15, 6.2);
+            const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, 15);
+            sg.addColorStop(0, 'rgba(255,255,190,1)');
+            sg.addColorStop(0.5, 'rgba(255,234,82,1)');
+            sg.addColorStop(1, 'rgba(255,198,46,1)');
+            ctx.fillStyle = sg; ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,215,0.55)'; ctx.lineWidth = 1.1; ctx.stroke();
+          } else {
+            ctx.globalAlpha = 0.94;
+            drawGemShape(11);
+            const gg2 = ctx.createLinearGradient(-11, -15, 11, 10);
+            gg2.addColorStop(0, 'rgba(210,244,255,1)');
+            gg2.addColorStop(0.4, 'rgba(140,218,255,1)');
+            gg2.addColorStop(0.7, 'rgba(100,185,244,1)');
+            gg2.addColorStop(1, 'rgba(78,160,222,1)');
+            ctx.fillStyle = gg2; ctx.fill();
+            ctx.strokeStyle = 'rgba(210,244,255,0.45)'; ctx.lineWidth = 0.9; ctx.stroke();
+            // Inner highlight facet
+            ctx.fillStyle = 'rgba(255,255,255,0.24)';
+            ctx.beginPath(); ctx.moveTo(0, -9.5); ctx.lineTo(5, -1.8); ctx.lineTo(-2.8, -3.8); ctx.closePath(); ctx.fill();
+          }
+          ctx.restore();
+        }
+      }
+
+      function drawCollectionNotifications(t) {
+        for (const n of collectionNotifications) {
+          const p = n.life / n.maxLife;
+          const yOff = -p * 42;
+          ctx.save();
+          ctx.globalAlpha = 1 - p;
+          ctx.font = `bold ${20 + (1 - p) * 6}px system-ui`;
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          // Shadow
+          ctx.fillStyle = 'rgba(0,0,0,0.3)';
+          ctx.fillText(n.icon, n.x + 1.5, n.y + yOff + 1.5);
+          // Icon
+          ctx.fillText(n.icon, n.x, n.y + yOff);
+          ctx.restore();
+        }
+      }
+
+      // ============================================================
+      // SOUND (default off)
+      // ============================================================
+      let soundOn = false;
+      let audio = null;
+
+      function createAudio() {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ac = new AudioCtx();
+        const master = ac.createGain();
+        master.gain.value = 0.0;
+
+        const lp = ac.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 2200;
+        lp.Q.value = 0.7;
+
+        master.connect(lp);
+        lp.connect(ac.destination);
+
+        const sub = ac.createOscillator();
+        sub.type = 'sine';
+        sub.frequency.value = 44;
+        const subG = ac.createGain();
+        subG.gain.value = 0.010;
+        sub.connect(subG);
+        subG.connect(master);
+
+        function bubbleTick(str = 0.35) {
+          const t = ac.currentTime;
+          const o = ac.createOscillator();
+          o.type = 'sine';
+          o.frequency.value = 220 + Math.random() * 140;
+          const g = ac.createGain();
+          g.gain.value = 0.0001;
+          o.connect(g);
+          g.connect(master);
+          const peak = 0.010 * clamp01(str);
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(peak, t + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+          o.start(t);
+          o.stop(t + 0.4);
+        }
+
+        // Event sound - low rumble
+        function eventRumble(intensity = 0.5) {
+          const t = ac.currentTime;
+          const o = ac.createOscillator();
+          o.type = 'sine';
+          o.frequency.value = 35 + Math.random() * 20;
+          const g = ac.createGain();
+          g.gain.value = 0.0001;
+          o.connect(g);
+          g.connect(master);
+          const peak = 0.015 * intensity;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(peak, t + 0.3);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+          o.start(t);
+          o.stop(t + 2);
+        }
+
+        // Predator approach: low ominous bass + rumble texture
+        function predatorApproach() {
+          const t = ac.currentTime;
+          const o1 = ac.createOscillator(); o1.type = 'sine'; o1.frequency.value = 28;
+          const g1 = ac.createGain(); g1.gain.value = 0.0001;
+          o1.connect(g1); g1.connect(master);
+          g1.gain.setValueAtTime(0.0001, t);
+          g1.gain.exponentialRampToValueAtTime(0.018, t + 0.6);
+          g1.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+          o1.start(t); o1.stop(t + 2.5);
+          const o2 = ac.createOscillator(); o2.type = 'sawtooth'; o2.frequency.value = 42;
+          const g2 = ac.createGain(); g2.gain.value = 0.0001;
+          o2.connect(g2); g2.connect(master);
+          g2.gain.setValueAtTime(0.0001, t);
+          g2.gain.exponentialRampToValueAtTime(0.006, t + 0.4);
+          g2.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
+          o2.start(t); o2.stop(t + 2.0);
+        }
+
+        // Predator victory: bright ascending arpeggio (C-E-G)
+        function predatorVictory() {
+          const t = ac.currentTime;
+          const notes = [440, 554, 659];
+          for (let i = 0; i < notes.length; i++) {
+            const o = ac.createOscillator(); o.type = 'sine'; o.frequency.value = notes[i];
+            const g = ac.createGain(); g.gain.value = 0.0001;
+            o.connect(g); g.connect(master);
+            const st = t + i * 0.12;
+            g.gain.setValueAtTime(0.0001, st);
+            g.gain.exponentialRampToValueAtTime(0.014, st + 0.04);
+            g.gain.exponentialRampToValueAtTime(0.0001, st + 0.45);
+            o.start(st); o.stop(st + 0.5);
+          }
+        }
+
+        sub.start();
+
+        return {
+          ac, master,
+          enable() {
+            const t = ac.currentTime;
+            master.gain.cancelScheduledValues(t);
+            master.gain.setValueAtTime(master.gain.value, t);
+            master.gain.linearRampToValueAtTime(0.75, t + 0.6);
+          },
+          disable() {
+            const t = ac.currentTime;
+            master.gain.cancelScheduledValues(t);
+            master.gain.setValueAtTime(master.gain.value, t);
+            master.gain.linearRampToValueAtTime(0.0, t + 0.35);
+          },
+          bubbleTick,
+          eventRumble,
+          predatorApproach,
+          predatorVictory
+        };
+      }
+
+      document.getElementById('snd').onclick = async () => {
+        if (!audio) {
+          audio = createAudio();
+          try { if (audio.ac.state !== 'running') await audio.ac.resume(); } catch { }
+        }
+        soundOn = !soundOn;
+        document.getElementById('snd').textContent = soundOn ? 'Sound On' : 'Sound';
+        if (soundOn) audio.enable(); else audio.disable();
+      };
+
+      // ============================================================
+      // SPATIAL HASHING
+      // ============================================================
+      let cellSize = 55;
+      let gridW = 0, gridH = 0, grid = null;
+
+      function initSpatial() {
+        gridW = Math.max(1, Math.ceil(W / cellSize));
+        gridH = Math.max(1, Math.ceil(H / cellSize));
+        grid = new Array(gridW * gridH);
+        for (let i = 0; i < grid.length; i++) grid[i] = [];
+      }
+
+      function rebuildGrid(fish) {
+        for (let i = 0; i < grid.length; i++) grid[i].length = 0;
+        for (let i = 0; i < fish.length; i++) {
+          const cx = clamp(Math.floor(fish[i].x / cellSize), 0, gridW - 1);
+          const cy = clamp(Math.floor(fish[i].y / cellSize), 0, gridH - 1);
+          grid[cy * gridW + cx].push(i);
+        }
+      }
+
+      // ============================================================
+      // FISH
+      // ============================================================
+      const fish = [];
+
+      function spawnFish(n) {
+        // Realistic fish colors - mostly silver/blue-gray with subtle variations
+        const silverTypes = [
+          { baseHue: 200, satRange: [5, 18], name: 'silver-blue' },
+          { baseHue: 210, satRange: [8, 22], name: 'steel-blue' },
+          { baseHue: 190, satRange: [6, 16], name: 'silver-cyan' },
+          { baseHue: 220, satRange: [10, 25], name: 'deep-silver' },
+          { baseHue: 195, satRange: [4, 14], name: 'pale-silver' },
+        ];
+
+        // Colorful fish types (5% of population)
+        const colorfulTypes = [
+          { baseHue: 35, satRange: [40, 65], name: 'golden' },
+          { baseHue: 15, satRange: [45, 70], name: 'orange' },
+          { baseHue: 355, satRange: [40, 60], name: 'red' },
+          { baseHue: 50, satRange: [50, 75], name: 'yellow' },
+          { baseHue: 280, satRange: [35, 55], name: 'purple' },
+          { baseHue: 165, satRange: [40, 60], name: 'teal' },
+        ];
+
+        for (let i = 0; i < n; i++) {
+          const roll = Math.random();
+
+          // 5% colorful fish
+          const isColorful = roll < 0.05;
+          // 5% larger fish (1.5x size)
+          const isLarge = roll >= 0.05 && roll < 0.10;
+
+          // Size: normal 3.5-5.5, large 5.25-8.25 (1.5x)
+          let size;
+          if (isLarge) {
+            size = rand(5.25, 8.25);
+          } else {
+            size = rand(3.5, 5.5);
+          }
+
+          // Pick color type
+          let colorType;
+          if (isColorful) {
+            colorType = colorfulTypes[Math.floor(Math.random() * colorfulTypes.length)];
+          } else {
+            // Weighted toward silver-blue
+            const weights = [40, 25, 20, 10, 5];
+            let r = Math.random() * 100;
+            let colorIdx = 0;
+            for (let j = 0; j < weights.length; j++) {
+              r -= weights[j];
+              if (r <= 0) { colorIdx = j; break; }
+            }
+            colorType = silverTypes[colorIdx];
+          }
+
+          const f = {
+            x: Math.random() * W,
+            y: Math.random() * H,
+            vx: rand(-0.25, 0.25),
+            vy: rand(-0.25, 0.25),
+            size,
+            isLarge,
+            isColorful,
+            bubbleAffinity: Math.random(),
+            baseHue: colorType.baseHue + rand(-8, 8),
+            baseSatMin: colorType.satRange[0],
+            baseSatMax: colorType.satRange[1],
+            hueSeed: Math.random(),
+            wander: rand(0.7, 1.3),
+            phase: rand(0, 1000),
+            breakout: 0,
+            tailPhase: rand(0, Math.PI * 2),
+            scaleShimmer: rand(0.8, 1.2),
+            bodyTone: rand(-5, 5),
+            // New: body undulation for natural swimming
+            bodyPhase: rand(0, Math.PI * 2),
+            bodyWaveSpeed: rand(0.008, 0.015),
+            // New: individual rhythm offset
+            rhythmOffset: rand(0, Math.PI * 2),
+            // Heading: fish facing direction (turned at limited rate in physics)
+            heading: rand(0, Math.PI * 2),
+            response: null
+          };
+
+          // Assign depth layer
+          assignDepthLayer(f);
+
+          fish.push(f);
+        }
+      }
+
+      function reconcileFishCount() {
+        const diff = targetFishCount - fish.length;
+        if (diff > 0) spawnFish(Math.min(diff, 60));
+        else if (diff < 0) fish.splice(Math.max(0, fish.length + diff), Math.min(-diff, 60));
+      }
+
+      // ============================================================
+      // RAINBOW TRAIL
+      // ============================================================
+      const trailParticles = [];
+
+      function spawnTrailParticle(x, y) {
+        trailParticles.push({
+          x, y,
+          life: 0,
+          maxLife: 600,
+          color: `hsl(${performance.now() * 0.2 % 360}, 100%, 70%)`,
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2
+        });
+        if (trailParticles.length > 50) trailParticles.shift();
+      }
+
+      function updateTrail(dt) {
+        if (pointer.idle < 100) {
+          spawnTrailParticle(pointer.x, pointer.y);
+        }
+        for (let i = trailParticles.length - 1; i >= 0; i--) {
+          const p = trailParticles[i];
+          p.life += dt;
+          p.x += p.vx * dt * 0.05;
+          p.y += p.vy * dt * 0.05;
+          if (p.life >= p.maxLife) trailParticles.splice(i, 1);
+        }
+      }
+
+      function drawTrail() {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        for (const p of trailParticles) {
+          const alpha = 1 - p.life / p.maxLife;
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 8 * alpha, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      // ============================================================
+      // DRAWING FUNCTIONS
+      // ============================================================
+      function drawBackground(t) {
+        // Base vertical gradient
+        const g0 = ctx.createLinearGradient(0, 0, 0, H);
+        g0.addColorStop(0.00, '#1a5c7a'); // Lighter Teal
+        g0.addColorStop(0.45, '#0f3b52'); // Deep Blue
+        g0.addColorStop(1.00, '#061a28'); // Dark Blue
+        ctx.fillStyle = g0;
+        ctx.fillRect(0, 0, W, H);
+
+        // Soft thermocline bands
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.18;
+        const bandN = 6;
+        for (let i = 0; i < bandN; i++) {
+          const y = (i / (bandN - 1)) * H;
+          const drift = Math.sin(t * 0.00012 + i * 1.7) * 38;
+          const thick = 180 + i * 55;
+          const gy = ctx.createLinearGradient(0, y - thick * 0.5, 0, y + thick * 0.5);
+          gy.addColorStop(0, 'rgba(0,0,0,0)');
+          gy.addColorStop(0.5, `rgba(155,210,245,${0.20 + i * 0.02})`);
+          gy.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.filter = `blur(${14 + i * 4}px)`;
+          ctx.fillStyle = gy;
+          ctx.fillRect(-60 + drift, y - thick * 0.5, W + 120, thick);
+        }
+        ctx.filter = 'none';
+        ctx.restore();
+
+        // Vignette
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        const vg = ctx.createRadialGradient(W * 0.5, H * 0.45, Math.min(W, H) * 0.35,
+          W * 0.5, H * 0.45, Math.max(W, H) * 0.78);
+        vg.addColorStop(0, 'rgba(0,0,0,0)');
+        vg.addColorStop(1, 'rgba(0,0,0,0.72)');
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+
+        // Local haze near plume
+        const gx = pointer.x, gy = pointer.y;
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.12;
+        const haze = ctx.createRadialGradient(gx, gy, 10, gx, gy, 360);
+        haze.addColorStop(0, 'rgba(190,240,255,0.24)');
+        haze.addColorStop(0.25, 'rgba(170,235,255,0.09)');
+        haze.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = haze;
+        ctx.beginPath();
+        ctx.arc(gx, gy, 360, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawSnow(t) {
+        for (const s of snow) {
+          const dx = s.x - pointer.x, dy = s.y - pointer.y;
+          const d = Math.hypot(dx, dy);
+          const plume = Math.exp(-d / 260);
+          const disturb = plume * 0.20;
+
+          s.x += (0.10 + s.vx) * s.z + (pointer.vx * 26) * disturb * s.z;
+          s.y += (0.18 + s.vy) * s.z + (pointer.vy * 26) * disturb * s.z;
+          s.x += Math.sin(t * 0.0007 + s.y * 0.01) * 0.10 * s.z;
+
+          if (s.x < -20) s.x = W + 20;
+          if (s.x > W + 20) s.x = -20;
+          if (s.y < -20) s.y = H + 20;
+          if (s.y > H + 20) s.y = -20;
+
+          ctx.globalAlpha = s.a;
+          ctx.fillStyle = 'rgba(200,240,255,1)';
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r * s.z, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawThermalCore(t) {
+        const x = pointer.x, y = pointer.y;
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        const pulse = 0.6 + 0.4 * Math.sin(t * 0.006);
+        const rg = ctx.createRadialGradient(x, y, 2, x, y, 120);
+        rg.addColorStop(0, 'rgba(220,255,250,0.18)');
+        rg.addColorStop(0.22, 'rgba(195,255,245,0.10)');
+        rg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = rg;
+        ctx.beginPath(); ctx.arc(x, y, 120, 0, Math.PI * 2); ctx.fill();
+
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = 'rgba(230,255,252,0.45)';
+        ctx.beginPath(); ctx.arc(x, y, (10 + 6 * pulse) * 0.18, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBubbles(t, dt) {
+        for (let i = bubbles.length - 1; i >= 0; i--) {
+          const b = bubbles[i];
+          b.life += dt;
+          b.wob += dt * 0.002;
+          b.y -= 0.030 * dt;
+          b.x += Math.sin(b.wob) * 0.05 * dt;
+          const p = clamp01(b.life / b.maxLife);
+          const a = (1 - p) * 0.40;
+          const rr = b.r * (0.75 + 0.25 * (1 - p));
+
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = a;
+          ctx.strokeStyle = 'rgba(190,235,255,0.55)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, rr, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+
+          if (b.life >= b.maxLife) bubbles.splice(i, 1);
+        }
+      }
+
+      // Draw event visualizations - subtle and natural
+      function drawEventEffects(t) {
+        for (const ev of events.active) {
+          const intensity = ev.intensity || 0;
+
+          if (ev.type === EVENT_TYPES.VORTEX) {
+            // Very subtle vortex visualization
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = intensity * 0.15;
+
+            const gradient = ctx.createRadialGradient(ev.x, ev.y, 0, ev.x, ev.y, ev.radius);
+            gradient.addColorStop(0, 'rgba(180, 210, 235, 0.2)');
+            gradient.addColorStop(0.5, 'rgba(160, 195, 225, 0.08)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(ev.x, ev.y, ev.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Very faint spiral hint
+            ctx.strokeStyle = 'rgba(200, 220, 240, 0.1)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (let a = 0; a < Math.PI * 4; a += 0.1) {
+              const r = (a / (Math.PI * 4)) * ev.radius * 0.8;
+              const x = ev.x + Math.cos(a * ev.direction + t * 0.002) * r;
+              const y = ev.y + Math.sin(a * ev.direction + t * 0.002) * r;
+              if (a === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          if (ev.type === EVENT_TYPES.PRESSURE_WAVE) {
+            // Subtle moving pressure wave
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = intensity * 0.22;
+
+            const gradient = ctx.createRadialGradient(ev.x, ev.y, 0, ev.x, ev.y, ev.radius);
+            // Warmer during scatter, cooler during regroup
+            const warmth = ev.compressionPhase < 0.5 ? 0.3 : 0;
+            gradient.addColorStop(0, `rgba(${200 + warmth * 40}, ${215 + warmth * 20}, 235, 0.25)`);
+            gradient.addColorStop(0.6, `rgba(${180 + warmth * 30}, ${200 + warmth * 15}, 225, 0.1)`);
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(ev.x, ev.y, ev.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+
+          if (ev.type === EVENT_TYPES.SPLIT) {
+            // Very subtle split center indicators
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = intensity * 0.14;
+
+            for (const c of ev.centers) {
+              const gradient = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, 80);
+              gradient.addColorStop(0, 'rgba(200, 220, 240, 0.15)');
+              gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+              ctx.fillStyle = gradient;
+              ctx.beginPath();
+              ctx.arc(c.x, c.y, 80, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
+          }
+        }
+      }
+
+      // Realistic fish rendering - silver schooling fish with metallic sheen
+      // Realistic fish rendering with natural swimming motion
+      function drawFish(f, t) {
+        // Response lifecycle & visual state
+        if (f.response && performance.now() - f.response.startTime >= f.response.duration) f.response = null;
+        let responseSpinOffset = 0, responseShimmerBoost = 0, responseColorStr = 0;
+        if (f.response) {
+          const rElapsed = performance.now() - f.response.startTime;
+          const rProg = rElapsed / f.response.duration;
+          if (f.response.type === 'spin') {
+            responseSpinOffset = easeInOut(rProg) * Math.PI * 4; // 2 full rotations, eased
+          } else if (f.response.type === 'shimmer') {
+            responseShimmerBoost = (1 - rProg) * 2.8;
+          } else if (f.response.type === 'colorflash') {
+            responseColorStr = 1 - rProg;
+          } else if (f.response.type === 'colorBurst') {
+            // Bright ramp-up, hold, then fade as fish returns
+            responseColorStr = rProg < 0.25 ? rProg / 0.25 : rProg < 0.55 ? 1.0 : Math.max(0, 1 - (rProg - 0.55) / 0.45);
+          }
+        }
+
+        const dx = f.x - pointer.x, dy = f.y - pointer.y;
+        const d = Math.hypot(dx, dy);
+        const maxDist = Math.min(W, H) * 0.65;
+        const near = 1 - Math.min(1, d / maxDist);
+        const nearPow = Math.pow(near, 0.6);
+        const spd = Math.hypot(f.vx, f.vy);
+
+        // Depth layer effects
+        const depthScale = f.depthScale || 1;
+        const depthAlpha = f.depthAlpha || 1;
+
+        // Hue
+        const hue = f.baseHue + (f.bodyTone || 0) + Math.sin(t * 0.0008 + f.phase) * 3;
+
+        // Saturation
+        let sat;
+        if (f.isColorful) {
+          sat = lerp(f.baseSatMin, f.baseSatMax + 20, nearPow) + spd * 3;
+        } else {
+          sat = lerp(f.baseSatMin, f.baseSatMax + 8, nearPow) + spd * 2;
+        }
+
+        // Lightness with flash effect
+        const flashBoost = (migration.flashIntensity || 0) * 20 * (0.5 + Math.random() * 0.5);
+        const baseLit = lerp(38, 62, nearPow) + flashBoost;
+        let lit = baseLit + (f.bodyTone || 0) * 0.5 + (f.isColorful ? 5 : 0);
+        // Response color boost (colorflash / colorBurst)
+        if (responseColorStr > 0) {
+          sat = lerp(sat, 82, responseColorStr);
+          lit = lerp(lit, 74, responseColorStr);
+        }
+
+        // Alpha with depth layer
+        const baseAlpha = lerp(0.25, 0.95, Math.pow(near, 0.45));
+        const alpha = baseAlpha * depthAlpha;
+
+        // Heading is smoothly turned in physics via rate-limited turning — use it directly
+        const ang = f.heading !== undefined ? f.heading : Math.atan2(f.vy, f.vx);
+
+        // Size with depth scaling
+        const s = f.size * depthScale;
+
+        // Body undulation - S-curve wave traveling down the body
+        if (!f.bodyPhase) f.bodyPhase = Math.random() * Math.PI * 2;
+        f.bodyPhase += (f.bodyWaveSpeed || 0.01) * (1 + spd * 0.5);
+        const bodyWave = Math.sin(f.bodyPhase) * 0.08 * (1 + spd * 0.3);
+
+        // Tail animation - synced with body wave
+        const tailSwing = Math.sin(f.bodyPhase - 0.8) * (0.18 + spd * 0.12);
+
+        ctx.save();
+        ctx.translate(f.x, f.y);
+        ctx.rotate(ang + responseSpinOffset);
+
+        // === BODY with subtle S-curve ===
+        const bodyGrad = ctx.createLinearGradient(0, -s * 1.0, 0, s * 1.0);
+        bodyGrad.addColorStop(0, `hsla(${hue + 5},${sat + 5}%,${lit - 22}%,${alpha})`);
+        bodyGrad.addColorStop(0.35, `hsla(${hue},${sat}%,${lit - 5}%,${alpha})`);
+        bodyGrad.addColorStop(0.5, `hsla(${hue - 3},${Math.max(0, sat - 2)}%,${lit + 12}%,${alpha})`);
+        bodyGrad.addColorStop(0.7, `hsla(${hue - 5},${Math.max(0, sat - 5)}%,${lit + 18}%,${alpha})`);
+        bodyGrad.addColorStop(1, `hsla(${hue - 8},${Math.max(0, sat - 8)}%,${lit + 8}%,${alpha * 0.9})`);
+
+        ctx.fillStyle = bodyGrad;
+        ctx.beginPath();
+
+        // Body with wave deformation
+        const wave1 = bodyWave * s * 0.5;
+        const wave2 = bodyWave * s * 0.8;
+
+        ctx.moveTo(s * 2.3, 0);
+        ctx.quadraticCurveTo(s * 1.2, -s * 0.75 + wave1, -s * 0.8, -s * 0.6 + wave2);
+        ctx.quadraticCurveTo(-s * 2.0, -s * 0.12 + wave2 * 0.5, -s * 2.3, wave2 * 0.3);
+        ctx.quadraticCurveTo(-s * 2.0, s * 0.12 + wave2 * 0.5, -s * 0.8, s * 0.6 + wave2);
+        ctx.quadraticCurveTo(s * 1.2, s * 0.75 + wave1, s * 2.3, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        // === TAIL with natural swing ===
+        ctx.fillStyle = `hsla(${hue + 3},${sat}%,${lit - 8}%,${alpha * 0.88})`;
+        ctx.beginPath();
+        const tailBase = wave2 * 0.3;
+        ctx.moveTo(-s * 2.2, tailBase);
+        ctx.quadraticCurveTo(-s * 2.6, -s * 0.3 + tailSwing * s * 0.5 + tailBase, -s * 3.0, -s * 0.7 + tailSwing * s + tailBase);
+        ctx.quadraticCurveTo(-s * 2.7, tailSwing * s * 0.2 + tailBase, -s * 2.6, tailSwing * s * 0.15 + tailBase);
+        ctx.quadraticCurveTo(-s * 2.7, tailSwing * s * 0.2 + tailBase, -s * 3.0, s * 0.7 + tailSwing * s + tailBase);
+        ctx.quadraticCurveTo(-s * 2.6, s * 0.3 + tailSwing * s * 0.5 + tailBase, -s * 2.2, tailBase);
+        ctx.closePath();
+        ctx.fill();
+
+        // === DORSAL FIN ===
+        if (s > 4.5 || f.isLarge) {
+          ctx.fillStyle = `hsla(${hue + 5},${sat + 3}%,${lit - 15}%,${alpha * 0.7})`;
+          ctx.beginPath();
+          ctx.moveTo(s * 0.5, -s * 0.58 + wave1 * 0.5);
+          ctx.quadraticCurveTo(s * 0.1, -s * 0.95 + wave1 * 0.3, -s * 0.5, -s * 0.62 + wave2 * 0.5);
+          ctx.quadraticCurveTo(-s * 0.1, -s * 0.65 + wave1 * 0.4, s * 0.4, -s * 0.56 + wave1 * 0.5);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // === PECTORAL FIN ===
+        if (s > 4.0 || f.isLarge) {
+          ctx.fillStyle = `hsla(${hue},${Math.max(0, sat - 3)}%,${lit + 5}%,${alpha * 0.5})`;
+          ctx.beginPath();
+          ctx.moveTo(s * 0.8, s * 0.25);
+          ctx.quadraticCurveTo(s * 0.3, s * 0.7, -s * 0.2, s * 0.45 + wave1 * 0.3);
+          ctx.quadraticCurveTo(s * 0.3, s * 0.35, s * 0.75, s * 0.22);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // === METALLIC SHIMMER - Enhanced during flash ===
+        ctx.globalCompositeOperation = 'screen';
+        const shimmerBase = (0.12 + nearPow * 0.25) * (f.scaleShimmer || 1);
+        const shimmerFlash = (migration.flashIntensity || 0) * 0.4;
+        const shimmerIntensity = shimmerBase + shimmerFlash + responseShimmerBoost;
+        ctx.globalAlpha = alpha * shimmerIntensity;
+
+        const hlGrad = ctx.createLinearGradient(-s * 1.5, 0, s * 1.8, 0);
+        hlGrad.addColorStop(0, 'rgba(255,255,255,0)');
+        hlGrad.addColorStop(0.3, 'rgba(240,250,255,0.6)');
+        hlGrad.addColorStop(0.6, 'rgba(255,255,255,0.9)');
+        hlGrad.addColorStop(1, 'rgba(240,250,255,0)');
+        ctx.strokeStyle = hlGrad;
+        ctx.lineWidth = Math.max(0.8, s * 0.15);
+        ctx.beginPath();
+        ctx.moveTo(s * 1.8, -s * 0.05 + wave1 * 0.2);
+        ctx.quadraticCurveTo(s * 0.5, -s * 0.18 + wave1 * 0.3, -s * 1.5, -s * 0.08 + wave2 * 0.3);
+        ctx.stroke();
+
+        ctx.globalAlpha = alpha * shimmerIntensity * 0.5;
+        ctx.strokeStyle = 'rgba(200,230,255,0.5)';
+        ctx.lineWidth = Math.max(0.5, s * 0.08);
+        ctx.beginPath();
+        ctx.moveTo(s * 1.2, -s * 0.35 + wave1 * 0.2);
+        ctx.quadraticCurveTo(s * 0.2, -s * 0.48 + wave1 * 0.25, -s * 0.8, -s * 0.38 + wave2 * 0.25);
+        ctx.stroke();
+
+        ctx.globalCompositeOperation = 'source-over';
+
+        // === EYE ===
+        if (s > 3.2) {
+          ctx.globalAlpha = alpha * 0.85;
+          ctx.fillStyle = `rgba(220,235,245,${0.7 + nearPow * 0.2})`;
+          const eyeSize = f.isLarge ? s * 0.09 : Math.max(0.9, s * 0.12);
+          ctx.beginPath();
+          ctx.arc(s * 1.65, -s * 0.08, eyeSize, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = `rgba(15,25,35,${0.8 + nearPow * 0.15})`;
+          ctx.beginPath();
+          ctx.arc(s * 1.68, -s * 0.08, eyeSize * 0.55, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = `rgba(255,255,255,${0.4 + nearPow * 0.3})`;
+          ctx.beginPath();
+          ctx.arc(s * 1.62, -s * 0.12, eyeSize * 0.25, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // ============================================================
+      // SIMULATION STEP
+      // ============================================================
+      function step(dt, t) {
+        // Update migration system
+        updateMigration(dt, t);
+
+        // Bubble spawn
+        const mv = Math.hypot(pointer.vx, pointer.vy);
+        const motion01 = clamp01(mv * 60);
+        const targetHz = 1.0 * (0.85 + 0.35 * motion01);
+        bubbleAcc += dt * (targetHz / 1000);
+        while (bubbleAcc >= 1.0) {
+          bubbleAcc -= 1.0;
+          spawnBubbleCluster(pointer.x, pointer.y);
+          if (soundOn && audio && Math.random() < 0.45) {
+            audio.bubbleTick(0.35 + 0.4 * motion01);
+          }
+        }
+
+        // Event Director update
+        updateEventDirector(dt, t);
+
+        // Flow particles
+        updateFlowParticles(dt);
+
+        // Density glow
+        updateDensityGlow();
+
+        reconcileFishCount();
+        rebuildGrid(fish);
+
+        const speedFactor = SPEED;
+
+        const alignW = 0.35;
+        const cohW = 0.15;
+        const sepW = 0.95;
+        const plumeAttractW = 2.0;   // Plume attraction (slightly boosted for heading-constraint loss during turns)
+        const plumeRiseW = 0.38;
+        const plumeShearW = 0.25;
+        const baseDrag = 0.91;       // Per-16.67ms decay base
+        const accel = 0.12;          // Increased from 0.08 for more snap/smoothness
+        const stepK = 0.10;
+
+        // Predator panic: weaken cohesion & plume so the school scatters chaotically
+        const panicActive = predator.active && predator.shark && !predator.shark.fleeing;
+        const cohesionMod = panicActive ? 0.10 : 1.0; // scatter: almost no group cohesion
+        const plumeMod = panicActive ? 0.18 : 1.0; // scatter: ignore thermal plume
+
+        for (let i = 0; i < fish.length; i++) {
+          const f = fish[i];
+
+          // Breakout behavior - reduced frequency for more mouse following
+          if (f.breakout > 0) f.breakout -= dt;
+          else if (Math.random() < 0.0005) f.breakout = rand(300, 800);
+
+          const cx = clamp(Math.floor(f.x / cellSize), 0, gridW - 1);
+          const cy = clamp(Math.floor(f.y / cellSize), 0, gridH - 1);
+          let count = 0;
+
+          let ax = 0, ay = 0;
+          let avx = 0, avy = 0;
+          let cox = 0, coy = 0;
+          let sepX = 0, sepY = 0;
+
+          // Neighbor search
+          for (let oy = -1; oy <= 1; oy++) {
+            const yy = cy + oy;
+            if (yy < 0 || yy >= gridH) continue;
+            for (let ox = -1; ox <= 1; ox++) {
+              const xx = cx + ox;
+              if (xx < 0 || xx >= gridW) continue;
+              const cell = grid[yy * gridW + xx];
+              for (let k = 0; k < cell.length; k++) {
+                const j = cell[k];
+                if (j === i) continue;
+                const o = fish[j];
+                const dx = o.x - f.x;
+                const dy = o.y - f.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 > 60 * 60) continue;
+                const d = Math.sqrt(d2) + 1e-6;
+
+                avx += o.vx; avy += o.vy;
+                cox += o.x; coy += o.y;
+
+                // Separation - larger fish need more space
+                const sepRad = f.isLarge ? 45 : (f.size > 4 ? 32 : 25);
+                if (d < sepRad) {
+                  const push = (sepRad - d) / sepRad;
+                  sepX -= (dx / d) * push;
+                  sepY -= (dy / d) * push;
+                }
+
+                count++;
+                if (count >= 18) break;
+              }
+              if (count >= 18) break;
+            }
+            if (count >= 18) break;
+          }
+
+
+          // Schooling forces
+          if (count > 0) {
+            const inv = 1 / count;
+            const mvx = avx * inv, mvy = avy * inv;
+
+            const dx_p = pointer.x - f.x;
+            const dy_p = pointer.y - f.y;
+            const dist_p = Math.hypot(dx_p, dy_p);
+            const inOrbitZone = (dist_p < 350); // Match orbitZone
+
+            // Reduce cohesion/alignment in orbit zone to allow circular formation
+            const orbitMod = inOrbitZone ? 0.05 : 1.0; // 95% reduction in orbit (near zero)
+
+            ax += (mvx - f.vx) * alignW * cohesionMod * orbitMod;
+            ay += (mvy - f.vy) * alignW * cohesionMod * orbitMod;
+
+            const mx = cox * inv, my = coy * inv;
+            ax += (mx - f.x) * 0.0009 * cohW * cohesionMod * orbitMod;
+            ay += (my - f.y) * 0.0009 * cohW * cohesionMod * orbitMod;
+
+            ax += sepX * sepW;
+            ay += sepY * sepW;
+          }
+
+          // Thermal plume - 85%+ fish should follow mouse
+          const pdx = pointer.x - f.x;
+          const pdy = pointer.y - f.y;
+          const dist = Math.max(1, Math.hypot(pdx, pdy));
+          const ux = pdx / dist, uy = pdy / dist;
+
+          // Extended range: affects entire screen
+          const maxRange = Math.max(W, H);
+          const normalizedDist = dist / maxRange;
+          // Strong base attraction that reaches everywhere + exponential for nearby
+          const heat = Math.exp(-dist / 600) * 0.7 + 0.35 * Math.max(0, 1 - normalizedDist);
+
+          // ============================================================
+          // CIRCULAR SWIMMING BEHAVIOR - Fish orbit around cursor
+          // ============================================================
+          // Reduced by ~40% for tighter ring
+          const fishOrbitRadius = 85 + (f.hueSeed - 0.5) * 40;
+          const orbitZone = 210;
+
+          let inOrbit = false;
+
+          if (dist < orbitZone) {
+            inOrbit = true;
+
+            // Calculate tangential direction (perpendicular to radial)
+            const tangX = -uy;
+            const tangY = ux;
+
+            // VERY strong tangential force for clear circular motion
+            const baseTangForce = 5.0; // Increased for snappier rotation
+            ax += tangX * baseTangForce;
+            ay += tangY * baseTangForce;
+
+            // Radial force to maintain orbit radius
+            const radiusError = dist - fishOrbitRadius;
+
+            if (radiusError > 0) {
+              const pullStrength = 1.6 * (radiusError / fishOrbitRadius);
+              ax += ux * pullStrength;
+              ay += uy * pullStrength;
+            } else {
+              const pushStrength = 4.0 * Math.abs(radiusError / fishOrbitRadius);
+              ax -= ux * pushStrength;
+              ay -= uy * pushStrength;
+            }
+          } else {
+            // Outside orbit zone - normal attraction
+            const proximityBoost = dist < 250 ? (1 + (250 - dist) / 625) : 1;
+            ax += ux * heat * plumeAttractW * proximityBoost * plumeMod;
+            ay += uy * heat * plumeAttractW * proximityBoost * plumeMod;
+          }
+
+          // Random breakout behavior - some fish leave the circle
+          if (inOrbit && !f.orbitBreakout) {
+            // Natural frequency for 1300 fish (~15% active)
+            if (Math.random() < 0.00015 * dt) {
+              f.orbitBreakout = 1600 + Math.random() * 1000; // Duration
+              f.breakoutAngle = Math.random() * Math.PI * 2;
+            }
+          }
+          if (f.orbitBreakout && f.orbitBreakout > 0) {
+            f.orbitBreakout -= dt;
+            const breakProg = f.orbitBreakout / 2600;
+            const breakX = Math.cos(f.breakoutAngle);
+            const breakY = Math.sin(f.breakoutAngle);
+            // Strong but smooth push (2.5)
+            ax += breakX * 2.5 * breakProg;
+            ay += breakY * 2.5 * breakProg;
+          }
+
+          // Calculate noise for wander (needed in both zones)
+          const tangX = -uy, tangY = ux;
+          const n = fbm((f.x * 0.004) + t * 0.00007, (f.y * 0.004) + t * 0.00005);
+
+          // Only apply drift and shear forces outside orbit zone
+          if (!inOrbit) {
+            const driftX = lerp(0, clamp(pointer.vx * 140, -1, 1), 0.35);
+            const driftY = lerp(-1, clamp(pointer.vy * 140, -1, 1), 0.25);
+            ax += driftX * heat * plumeRiseW;
+            ay += driftY * heat * plumeRiseW;
+
+            const shear = (n - 0.5) * plumeShearW;
+            ax += tangX * heat * shear;
+            ay += tangY * heat * shear;
+          }
+
+          // Micro-wander (reduced in orbit zone)
+          f.phase += dt * 0.002;
+          const wanderMod = inOrbit ? 0.3 : 1.0;
+          const wig = (Math.sin(f.phase + f.hueSeed * 6.28) + (n - 0.5)) * 0.18 * f.wander * wanderMod;
+          ax += wig;
+          ay += -wig * 0.6;
+
+          // Breakout tangential push - reduced
+          if (f.breakout > 0) {
+            const p = f.breakout / 800;
+            ax += tangX * 0.15 * p;
+            ay += tangY * 0.15 * p;
+          }
+
+          // Bubble attraction - disabled in orbit to prevent clustering
+          if (!inOrbit && f.bubbleAffinity < 0.46 && bubbles.length) {
+            let bxSum = 0, bySum = 0, bCount = 0;
+            for (let bi = 0; bi < bubbles.length; bi++) {
+              const b = bubbles[bi];
+              const bdx = b.x - f.x;
+              const bdy = b.y - f.y;
+              const bd = Math.hypot(bdx, bdy);
+              if (bd < b.rad) {
+                const p = clamp01(b.life / b.maxLife);
+                const w = (1 - p) * b.strength * (1 - bd / b.rad);
+                bxSum += (bdx / (bd + 1)) * w;
+                bySum += (bdy / (bd + 1)) * w;
+                bCount++;
+              }
+              if (bCount >= 3) break;
+            }
+            if (bCount) {
+              ax += bxSum * 0.80;
+              ay += bySum * 0.80;
+            }
+          }
+
+          // EVENT FORCES
+          const evForce = getEventForce(f, t);
+          ax += evForce.fx;
+          ay += evForce.fy;
+
+          // MEGAFAUNA ATTRACTION (subtle pull toward passing large creatures)
+          const megaForce = getMegafaunaForce(f);
+          ax += megaForce.fx;
+          ay += megaForce.fy;
+
+          // PREDATOR REPULSION (panic scatter when shark is prowling)
+          const predForce = getPredatorForce(f);
+          ax += predForce.fx;
+          ay += predForce.fy;
+
+          // MIGRATION FORCES (natural schooling direction, breathing, waves)
+          const migForce = getMigrationForce(f, t);
+          ax += migForce.fx;
+          ay += migForce.fy;
+
+          // Anti-clumping near pointer - reduced to allow closer following
+          if (dist < 40) {
+            const push = (40 - dist) / 40;
+            ax -= ux * 0.8 * push;
+            ay -= uy * 0.8 * push;
+          }
+
+          // Suppress schooling attraction during burst responses so fish escapes the school
+          if (f.response && (f.response.type === 'burst' || f.response.type === 'colorBurst')) {
+            const rProg = (performance.now() - f.response.startTime) / f.response.duration;
+            if (rProg < 0.38) {
+              const suppress = 0.12 + 0.88 * (rProg / 0.38); // ramp 12% → 100% force
+              ax *= suppress; ay *= suppress;
+            }
+          }
+
+          // --- Frame-rate independent drag ---
+          const migSpeedMod = migration.speedMod || 1;
+          const baseDragVal = baseDrag + (f.isLarge ? -0.005 : (f.size > 4 ? 0.00 : 0.02));
+          const dragDecay = Math.pow(baseDragVal, dt / 16.667);
+
+          // --- Heading system ---
+          // Initialize heading from velocity on first tick
+          if (f.heading === undefined || isNaN(f.heading)) {
+            f.heading = Math.atan2(f.vy || 0.01, f.vx || 1);
+          }
+
+          const forceMag = Math.hypot(ax, ay);
+          const isBurst = f.response && (f.response.type === 'burst' || f.response.type === 'colorBurst');
+
+          if (isBurst) {
+            // During burst: heading follows velocity freely (fish tumbles/dashes)
+            const bv = Math.hypot(f.vx, f.vy);
+            if (bv > 0.3) f.heading = Math.atan2(f.vy, f.vx);
+            // Direct integration — no heading constraint during burst
+            f.vx = (f.vx + ax * dt * accel * speedFactor * migSpeedMod) * dragDecay;
+            f.vy = (f.vy + ay * dt * accel * speedFactor * migSpeedMod) * dragDecay;
+
+          } else if (forceMag > 0.005) {
+            // --- Turn heading toward net-force direction at a rate-limited speed ---
+            const forceAngle = Math.atan2(ay, ax);
+            const currentSpeed = Math.hypot(f.vx, f.vy);
+            // Larger fish & higher speed → slower turn (wider arc)
+            const speedNorm = Math.min(1, currentSpeed / 10);
+            const baseTurn = f.isLarge ? 0.0040 : 0.0065; // Increased turn rate for silkier arcs
+            const turnRate = lerp(baseTurn * 1.35, baseTurn * 0.65, speedNorm);
+
+            let hdiff = forceAngle - f.heading;
+            while (hdiff > Math.PI) hdiff -= Math.PI * 2;
+            while (hdiff < -Math.PI) hdiff += Math.PI * 2;
+            f.heading += Math.sign(hdiff) * Math.min(Math.abs(hdiff), turnRate * dt);
+
+            // --- Project forces onto heading axis ---
+            const hx = Math.cos(f.heading), hy = Math.sin(f.heading);
+            const fwd = ax * hx + ay * hy;   // forward component (full)
+            const lat = -ax * hy + ay * hx;   // lateral component
+            const latEff = inOrbit ? 1.0 : 0.22; // Increase lateral efficiency in orbit to turn sharper
+            const effAx = hx * fwd + (-hy) * lat * latEff;
+            const effAy = hy * fwd + hx * lat * latEff;
+
+            f.vx = (f.vx + effAx * dt * accel * speedFactor * migSpeedMod) * dragDecay;
+            f.vy = (f.vy + effAy * dt * accel * speedFactor * migSpeedMod) * dragDecay;
+
+            // --- Velocity steering: bleed velocity direction toward heading ---
+            // This is what creates the visible curved pursuit path
+            const velSpd = Math.hypot(f.vx, f.vy);
+            if (velSpd > 0.12) {
+              const velAngle = Math.atan2(f.vy, f.vx);
+              let vdiff = f.heading - velAngle;
+              while (vdiff > Math.PI) vdiff -= Math.PI * 2;
+              while (vdiff < -Math.PI) vdiff += Math.PI * 2;
+              const steer = vdiff * 0.05 * (dt / 16.667);
+              const newA = velAngle + steer;
+              f.vx = Math.cos(newA) * velSpd;
+              f.vy = Math.sin(newA) * velSpd;
+            }
+          } else {
+            // Near-zero force: just let drag bleed velocity (inertia glide)
+            f.vx *= dragDecay;
+            f.vy *= dragDecay;
+          }
+
+          // Clamp speed — panic mode allows 2.4× faster sprint
+          const v = Math.hypot(f.vx, f.vy) || 1;
+          const panicBoost = panicActive ? 2.4 : 1.0;
+          const vmax = (f.isLarge ? 13 : (f.size > 4 ? 16 : 15)) * speedFactor * panicBoost;
+          if (v > vmax) {
+            f.vx = (f.vx / v) * vmax;
+            f.vy = (f.vy / v) * vmax;
+          }
+
+          // Integrate position
+          f.x += f.vx * dt * stepK;
+          f.y += f.vy * dt * stepK;
+
+          // Wrap
+          if (f.x < -60) f.x = W + 60;
+          else if (f.x > W + 60) f.x = -60;
+          if (f.y < -60) f.y = H + 60;
+          else if (f.y > H + 60) f.y = -60;
+        }
+      }
+
+      // ============================================================
+      // MAIN LOOP
+      // ============================================================
+      let lastT = performance.now();
+
+      function frame() {
+        const t = performance.now();
+        const dt = Math.min(50, t - lastT);
+        lastT = t;
+
+        // Background layers
+        drawBackground(t);
+        drawGodRays(t);
+
+        // Megafauna in deep background (behind everything else)
+        updateMegafauna(dt);
+        drawMegafauna(t);
+
+        drawSnow(t);
+        drawCurrentLines(t);
+        drawThermalCore(t);
+        drawFlowParticles();
+        drawTrail(); // Rainbow trail
+        drawEventEffects(t);
+        drawDensityGlow();
+        drawSchoolFlash();
+
+        // Micro-surprises (spawn & update collectibles, fish fry, notifications)
+        updateMicroSurprises(dt, t);
+        updateTrail(dt); // Rainbow trail logic
+
+        // Predator: update state, draw shark shadow behind fish school
+        updatePredator(dt);
+        drawPredator();
+
+        // Simulation
+        step(dt, t);
+        drawBubbles(t, dt);
+
+        // Fish rendered by depth layer: background -> midground -> foreground
+        // Then within each layer: small -> large
+        const depthOrder = ['background', 'midground', 'foreground'];
+        for (const layer of depthOrder) {
+          for (let pass = 0; pass < 2; pass++) {
+            for (const f of fish) {
+              if ((f.depthLayer || 'midground') !== layer) continue;
+              const isLargePass = pass === 1;
+              if (f.isLarge !== isLargePass) continue;
+              drawFish(f, t);
+            }
+          }
+        }
+
+        // Foreground micro-surprise visuals (drawn above fish school)
+        drawFishFry(t);
+        drawCollectibles(t);
+        drawCollectionNotifications(t);
+
+        // Predator light-wave rings + victory flash (foreground, above everything)
+        drawPredatorWaves();
+        if (events.flashTimer > 0) {
+          const efp = 1 - events.flashTimer / 800;
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = (1 - efp) * 0.13;
+          ctx.strokeStyle = 'rgba(180, 215, 242, 1)';
+          ctx.lineWidth = 9;
+          ctx.strokeRect(4.5, 4.5, W - 9, H - 9);
+          ctx.restore();
+        }
+
+        requestAnimationFrame(frame);
+      }
+
+      // ============================================================
+      // BOOT
+      // ============================================================
+      resize();
+      initSnow();
+      initGodRays();
+      initSpatial();
+      initSubSchools();
+
+      // Initial pointer position
+      pointer.x = W * 0.5;
+      pointer.y = H * 0.5;
+
+      fish.length = 0;
+      spawnFish(targetFishCount);
+
+      // Trigger initial bubble to draw attention
+      setTimeout(() => {
+        spawnBubbleCluster(W * 0.5, H * 0.5);
+      }, 500);
+
+      // First event after 5 seconds if user hasn't moved
+      events.lastEventTime = performance.now() - 35000;
+
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+
+</html>
