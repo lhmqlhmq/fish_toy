@@ -167,8 +167,13 @@
       <div class="pill" id="cntVal">800</div>
       <button id="cntPlus" title="More fish">+</button>
     </div>
+    <div class="grp">
+      <span style="opacity:.7;font-weight:800;">STATUS</span>
+      <div class="pill" id="modeVal" style="width: 80px;">Following</div>
+    </div>
     <button id="snd" title="Toggle sound (default off)">Sound</button>
   </div>
+
 
   <div class="hint" id="hint">Move to lead the school • Tap fish to play • Collect ⭐💎</div>
   <div class="watermark">Follow Fishy, Created by Jason Li</div>
@@ -210,7 +215,7 @@
         return f;
       }
 
-      // ---------- World State & Features ----------
+      let W, H, DPR, VIEW_SCALE;
       const world = {
         time: 0,
         dayCycle: 0, // 0: night, 0.5: day, 1: night
@@ -265,7 +270,8 @@
         }
         ctx.restore();
       }
-      let W = innerWidth, H = innerHeight, DPR = 1, VIEW_SCALE = 1;
+
+
 
       function resize() {
         DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -280,6 +286,14 @@
         canvas.style.height = H + 'px';
         ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
+        // Safe re-initialization of pointer if it's the first time
+        if (pointer && (isNaN(pointer.x) || pointer.x === 0)) {
+          pointer.x = W * 0.5;
+          pointer.y = H * 0.5;
+          pointOfInterest.x = pointer.x;
+          pointOfInterest.y = pointer.y;
+        }
+
         // Re-calculate density if needed
         const screenArea = (W * H) / (1920 * 1080);
         const baseCount = isMobile ? 400 : 800;
@@ -290,13 +304,15 @@
         initSpatial();
       }
 
+
       addEventListener('resize', resize, { passive: true });
 
       // ---------- Pointer ----------
-      const pointer = { x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, lastT: performance.now(), idle: 0 };
-      const pointOfInterest = { x: W * 0.5, y: H * 0.5 };
+      const pointer = { x: 0, y: 0, vx: 0, vy: 0, lastT: performance.now(), idle: 0 };
+      const pointOfInterest = { x: 0, y: 0 };
       let lastPointerMove = performance.now();
       let lastClickT = 0;
+
 
 
       addEventListener('pointermove', (e) => {
@@ -328,7 +344,8 @@
         const cx = e.clientX, cy = e.clientY;
 
         // --- Double Click Detection for Flash Expansion ---
-        if (now - lastClickT < 300) {
+        if (now - lastClickT < 400) {
+
           triggerFlashExpansion(cx, cy);
           lastClickT = 0; // reset
           return;
@@ -424,10 +441,17 @@
 
       const spdVal = document.getElementById('spdVal');
       const cntVal = document.getElementById('cntVal');
+      const modeVal = document.getElementById('modeVal');
+
       function updateHud() {
         spdVal.textContent = SPEED.toFixed(2) + '×';
         cntVal.textContent = String(targetFishCount);
+        if (modeVal) {
+          modeVal.textContent = world.autonomousMode > 0.8 ? 'Autonomous' : (world.autonomousMode > 0.1 ? 'Drifting...' : 'Following');
+          modeVal.style.color = world.autonomousMode > 0.8 ? '#4af' : (world.autonomousMode > 0.1 ? '#fa4' : '#eee');
+        }
       }
+
       updateHud();
 
       document.getElementById('spdMinus').onclick = () => { SPEED = clamp(SPEED / 1.12, 0.25, 4.0); updateHud(); };
@@ -2799,6 +2823,8 @@
         } else {
           world.autonomousMode = lerp(world.autonomousMode, 0.0, 0.15 * (dt / 16.67));
         }
+        if (t % 500 < 50) updateHud(); // Periodic HUD update for status
+
 
 
 
@@ -3239,7 +3265,19 @@
         drawDensityGlow();
         drawSchoolFlash();
 
+        // Render POI visual for debugging (Subtle blue pulse)
+        if (pointer.idle > 1000) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(pointOfInterest.x, pointOfInterest.y, 10 + Math.sin(t * 0.01) * 3, 0, 7);
+          ctx.strokeStyle = `rgba(180, 220, 255, ${0.1 + 0.2 * world.autonomousMode})`;
+          ctx.setLineDash([2, 4]);
+          ctx.stroke();
+          ctx.restore();
+        }
+
         // Micro-surprises (spawn & update collectibles, fish fry, notifications)
+
         updateMicroSurprises(dt, t);
 
         // Predator: update state, draw shark shadow behind fish school
