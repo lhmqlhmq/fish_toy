@@ -302,8 +302,9 @@
       }
 
       // ---------- HUD ----------
-      let SPEED = 0.6;
-      let targetFishCount = 800;
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      let SPEED = isMobile ? 0.25 : 0.6;
+      let targetFishCount = isMobile ? 350 : 800;
 
       const spdVal = document.getElementById('spdVal');
       const cntVal = document.getElementById('cntVal');
