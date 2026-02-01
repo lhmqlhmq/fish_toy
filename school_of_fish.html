@@ -167,9 +167,9 @@
       <div class="pill" id="cntVal">800</div>
       <button id="cntPlus" title="More fish">+</button>
     </div>
-    <div class="grp">
-      <span style="opacity:.7;font-weight:800;">STATUS</span>
-      <div class="pill" id="modeVal" style="width: 80px;">Following</div>
+    <div class="grp" style="background: rgba(100, 200, 255, 0.15); border: 1px solid rgba(130, 220, 255, 0.3);">
+      <span style="opacity:.7;font-weight:800;color:#99f2ff;">STATUS</span>
+      <div class="pill" id="modeVal" style="width: 85px; color: #fff; font-weight: 800;">Following</div>
     </div>
     <button id="snd" title="Toggle sound (default off)">Sound</button>
   </div>
@@ -419,21 +419,23 @@
             f.suppressAttraction = 1200 + Math.random() * 600; // Increased suppression time to 1.2-1.8s
             // Immediate heading update for visual snap
             f.heading = Math.atan2(f.vy, f.vx);
-            f.response = { type: 'shimmer', startTime: performance.now(), duration: 1200 };
+            f.response = { type: 'shimmer', startTime: performance.now(), duration: 1500 };
           }
         }
 
+        console.log("%c FLASH EXPANSION! %c Position:", "background: #f00; color: #fff; font-weight: bold;", "", cx, cy);
+
         // --- Visual Shockwave ---
-        events.flashTimer = 400; // Visual screen flash
+        events.flashTimer = 500; // Visual screen flash
         events.active.push({
           type: EVENT_TYPES.PRESSURE_WAVE,
           x: cx, y: cy,
           dx: 0, dy: 0,
           speed: 0,
-          radius: Math.min(W, H) * 0.55,
-          strength: 4.5,
-          life: 0, maxLife: 800,
-          riseTime: 100, fadeTime: 600,
+          radius: Math.min(W, H) * 0.7,
+          strength: 12.0, // Aggressive scatter
+          life: 0, maxLife: 1000,
+          riseTime: 50, fadeTime: 900,
           compressionPhase: 0,
           intensity: 1.0
         });
@@ -2390,12 +2392,14 @@
             // Orbiting properties
             orbitDir: Math.random() < 0.5 ? 1 : -1,
             orbitBias: rand(0.5, 1.5),
-            orbitRadius: rand(100, 150), // Initialize orbitRadius
+            orbitRadius: rand(100, 160),
             personality: (['curious', 'shy', 'bold', 'standard'])[Math.floor(Math.random() * 4)],
             response: null,
             suppressAttraction: 0,
-            expansionBoost: 1.0
+            expansionBoost: 1.0,
+            lastHeading: 0
           };
+
 
 
           // Assign depth layer
@@ -3041,9 +3045,14 @@
               ay += (mvy - f.vy) * p_alignW * cohesionMod;
               ax += (mx - f.x) * 0.0009 * p_cohW * cohesionMod;
               ay += (my - f.y) * 0.0009 * p_cohW * cohesionMod;
+            } else {
+              // During expansion, apply a slight separation boost to enhance scattering
+              ax += sepX * 1.5;
+              ay += sepY * 1.5;
             }
             ax += sepX * sepW;
             ay += sepY * sepW;
+
           }
 
           // Thermal plume & Orbiting - Use pointOfInterest instead of raw pointer
