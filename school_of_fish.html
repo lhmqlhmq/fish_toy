@@ -304,11 +304,12 @@
         const dt = Math.max(1, now - pointer.lastT);
         const nx = e.clientX, ny = e.clientY;
 
-        // Reset idle if mouse actually moved significantly
-        if (Math.hypot(nx - pointer.x, ny - pointer.y) > 0.5) {
+        // Reset idle if mouse actually moved significantly (2.0px threshold to avoid sensor jitter)
+        if (Math.hypot(nx - pointer.x, ny - pointer.y) > 2.0) {
           pointer.idle = 0;
           lastPointerMove = now;
         }
+
 
         pointer.vx = (nx - pointer.x) / dt;
         pointer.vy = (ny - pointer.y) / dt;
@@ -333,6 +334,8 @@
           return;
         }
         lastClickT = now;
+
+
 
         pointer.idle = 0;
         lastPointerMove = now;
@@ -395,8 +398,11 @@
             const force = p * 18;
             f.vx += (dx / d) * force;
             f.vy += (dy / d) * force;
+            // Overdrive max speed temporarily
+            f.expansionBoost = 2.5;
             // Immediate heading update for visual snap
             f.heading = Math.atan2(f.vy, f.vx);
+
 
             // Visual shimmy
             if (p > 0.3 && !f.response) {
@@ -2794,6 +2800,8 @@
           world.autonomousMode = lerp(world.autonomousMode, 0.0, 0.15 * (dt / 16.67));
         }
 
+
+
         // Calculate Point of Interest (POI)
         // Blends between pointer and wandering center based on autonomousMode
         const autonomousX = W * 0.5 + Math.sin(t * 0.0003) * W * 0.15;
@@ -3176,13 +3184,15 @@
             f.vy *= dragDecay;
           }
 
-          // Clamp speed — panic mode allows 2.4× faster sprint
-          const v = Math.hypot(f.vx, f.vy) || 1;
-          const panicBoost = panicActive ? 2.4 : 1.0;
-          const vmax = (f.isLarge ? 13 : (f.size > 4 ? 16 : 15)) * speedFactor * panicBoost;
-          if (v > vmax) {
-            f.vx = (f.vx / v) * vmax;
-            f.vy = (f.vy / v) * vmax;
+          // Clamp speed — panic mode allows 2.4× faster sprint, expansion boost allows temporary overdrive
+          let speed = Math.hypot(f.vx, f.vy) || 1e-6;
+          const boost = f.expansionBoost || 1.0;
+          if (f.expansionBoost > 1.0) f.expansionBoost -= 0.05;
+
+          const maxSpeed = (f.isLarge ? 2.5 : (f.size > 4 ? 3.5 : 4.5)) * speedFactor * boost;
+          if (speed > maxSpeed) {
+            f.vx = (f.vx / speed) * maxSpeed;
+            f.vy = (f.vy / speed) * maxSpeed;
           }
 
           // Integrate position
@@ -3196,6 +3206,7 @@
           else if (f.y > H + 60) f.y = -60;
         }
       }
+
 
       // ============================================================
       // MAIN LOOP
