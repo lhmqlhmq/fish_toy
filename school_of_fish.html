@@ -320,11 +320,12 @@
         const dt = Math.max(1, now - pointer.lastT);
         const nx = e.clientX, ny = e.clientY;
 
-        // Reset idle if mouse actually moved significantly (2.0px threshold to avoid sensor jitter)
-        if (Math.hypot(nx - pointer.x, ny - pointer.y) > 2.0) {
+        // Reset idle if mouse actually moved significantly (5.0px threshold to avoid sensor jitter)
+        if (Math.hypot(nx - pointer.x, ny - pointer.y) > 5.0) {
           pointer.idle = 0;
           lastPointerMove = now;
         }
+
 
 
         pointer.vx = (nx - pointer.x) / dt;
@@ -413,20 +414,30 @@
           if (d < sr && d > 0.5) {
             const p = (sr - d) / sr;
             const force = p * 18;
-            f.vx += (dx / d) * force;
-            f.vy += (dy / d) * force;
-            // Overdrive max speed temporarily
+            // Overdrive max speed and suppress attraction temporarily
             f.expansionBoost = 2.5;
+            f.suppressAttraction = 1200 + Math.random() * 600; // Increased suppression time to 1.2-1.8s
             // Immediate heading update for visual snap
             f.heading = Math.atan2(f.vy, f.vx);
-
-
-            // Visual shimmy
-            if (p > 0.3 && !f.response) {
-              f.response = { type: 'shimmer', startTime: performance.now(), duration: 800 };
-            }
+            f.response = { type: 'shimmer', startTime: performance.now(), duration: 1200 };
           }
         }
+
+        // --- Visual Shockwave ---
+        events.flashTimer = 400; // Visual screen flash
+        events.active.push({
+          type: EVENT_TYPES.PRESSURE_WAVE,
+          x: cx, y: cy,
+          dx: 0, dy: 0,
+          speed: 0,
+          radius: Math.min(W, H) * 0.55,
+          strength: 4.5,
+          life: 0, maxLife: 800,
+          riseTime: 100, fadeTime: 600,
+          compressionPhase: 0,
+          intensity: 1.0
+        });
+
         spawnBubbleCluster(cx, cy);
         if (soundOn && audio) {
           // Low frequency "thump" via bubbleTick with lower pitch/tone if possible
@@ -2375,12 +2386,17 @@
             rhythmOffset: rand(0, Math.PI * 2),
             // Heading: fish facing direction (turned at limited rate in physics)
             heading: rand(0, Math.PI * 2),
+            lastHeading: rand(0, Math.PI * 2), // Initialize lastHeading
             // Orbiting properties
             orbitDir: Math.random() < 0.5 ? 1 : -1,
             orbitBias: rand(0.5, 1.5),
+            orbitRadius: rand(100, 150), // Initialize orbitRadius
             personality: (['curious', 'shy', 'bold', 'standard'])[Math.floor(Math.random() * 4)],
-            response: null
+            response: null,
+            suppressAttraction: 0,
+            expansionBoost: 1.0
           };
+
 
           // Assign depth layer
           assignDepthLayer(f);
@@ -2498,7 +2514,9 @@
       }
 
       function drawThermalCore(t) {
-        const x = pointer.x, y = pointer.y;
+        // Redirect to POI so the glow follows the school's target
+        const x = pointOfInterest.x, y = pointOfInterest.y;
+
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
         const pulse = 0.6 + 0.4 * Math.sin(t * 0.006);
@@ -2679,7 +2697,7 @@
 
         // Body undulation - S-curve wave traveling down the body
         if (!f.bodyPhase) f.bodyPhase = Math.random() * Math.PI * 2;
-        f.bodyPhase += (f.bodyWaveSpeed || 0.01) * (1 + spd * 0.5);
+        f.bodyPhase += (f.bodyWaveSpeed || 0.01) * (1 + spd * 0.3);
         const bodyWave = Math.sin(f.bodyPhase) * 0.08 * (1 + spd * 0.3);
 
         // Tail animation - synced with body wave
@@ -2921,19 +2939,32 @@
 
           if (world.autonomousMode > 0.1) {
             // Increase internal cohesion and alignment to keep the school tight during idle
-            p_cohW *= (1 + world.autonomousMode * 1.5);
+            // but ONLY if not being suppressed by an expansion event
+            const idleBoost = (f.suppressAttraction > 0) ? 0.3 : (1 + world.autonomousMode * 1.5);
+            p_cohW *= idleBoost;
             p_alignW *= (1 + world.autonomousMode * 0.5);
           }
+
+          if (f.suppressAttraction > 0) {
+            f.suppressAttraction -= dt;
+            // Heavily suppress schooling during expansion to allow scattering
+            p_cohW *= 0.1;
+            p_alignW *= 0.1;
+          }
+
+
 
 
           if (f.personality === 'curious') { p_attrW *= 1.6; p_cohW *= 0.5; }
           else if (f.personality === 'shy') {
             p_cohW *= 1.4; p_attrW *= 0.7;
-            if (mv > 0.4 && Math.hypot(pointer.x - f.x, pointer.y - f.y) < 150) {
+            const fleeX = pointOfInterest.x - f.x, fleeY = pointOfInterest.y - f.y;
+            if (mv > 0.4 && Math.hypot(fleeX, fleeY) < 150) {
               // Fleeing force
-              ax -= (pointer.x - f.x) * 0.01; ay -= (pointer.y - f.y) * 0.01;
+              ax -= fleeX * 0.01; ay -= fleeY * 0.01;
             }
           }
+
           else if (f.personality === 'bold') { p_breakRate *= 2.5; }
           else if (f.personality === 'loner') { p_cohW = 0; p_alignW *= 0.3; }
 
@@ -3002,13 +3033,15 @@
           if (count > 0) {
             const inv = 1 / count;
             const mvx = avx * inv, mvy = avy * inv;
-            ax += (mvx - f.vx) * p_alignW * cohesionMod;
-            ay += (mvy - f.vy) * p_alignW * cohesionMod;
-
             const mx = cox * inv, my = coy * inv;
-            ax += (mx - f.x) * 0.0009 * p_cohW * cohesionMod;
-            ay += (my - f.y) * 0.0009 * p_cohW * cohesionMod;
 
+            // Standardize gating for all schooling forces
+            if (!(f.suppressAttraction > 0)) {
+              ax += (mvx - f.vx) * p_alignW * cohesionMod;
+              ay += (mvy - f.vy) * p_alignW * cohesionMod;
+              ax += (mx - f.x) * 0.0009 * p_cohW * cohesionMod;
+              ay += (my - f.y) * 0.0009 * p_cohW * cohesionMod;
+            }
             ax += sepX * sepW;
             ay += sepY * sepW;
           }
@@ -3029,25 +3062,28 @@
             const proximityBoost = dist < 250 ? (1 + (250 - dist) / 500) : 1;
 
             if (dist > orbitTargetR * 1.6) {
-              // Far away: pull to mouse
-              ax += ux * heat * p_attrW * proximityBoost * plumeMod;
-              ay += uy * heat * p_attrW * proximityBoost * plumeMod;
+              // Far away: pull to POI
+              if (!(f.suppressAttraction > 0)) {
+                ax += ux * heat * p_attrW * proximityBoost * plumeMod;
+                ay += uy * heat * p_attrW * proximityBoost * plumeMod;
+              }
             } else {
-              // Orbit Zone: pull to orbit radius (Error Correction) instead of center
-              const orbitStren = Math.exp(-dist / 250) * 1.8 * plumeMod;
-              const radialErr = dist - orbitTargetR;
-              // Stronger pull to the RING itself
-              const radialForce = -radialErr * 0.045 * orbitStren;
-              ax += ux * radialForce;
-              ay += uy * radialForce;
+              // Orbit Zone
+              if (!(f.suppressAttraction > 0)) {
+                const orbitStren = Math.exp(-dist / 250) * 1.8 * plumeMod;
+                const radialErr = dist - orbitTargetR;
+                const radialForce = -radialErr * 0.045 * orbitStren;
+                ax += ux * radialForce;
+                ay += uy * radialForce;
 
-              // Tangential force (orbiting)
-              const tangX_o = -uy, tangY_o = ux;
-              const orbitDir = f.orbitDir || 1;
-              ax += tangX_o * orbitDir * 1.2 * orbitStren * (f.orbitBias || 1);
-              ay += tangY_o * orbitDir * 1.2 * orbitStren * (f.orbitBias || 1);
+                const tangX_o = -uy, tangY_o = ux;
+                const orbitDir = f.orbitDir || 1;
+                ax += tangX_o * orbitDir * 1.2 * orbitStren * (f.orbitBias || 1);
+                ay += tangY_o * orbitDir * 1.2 * orbitStren * (f.orbitBias || 1);
+              }
             }
           }
+
 
           const driftX = lerp(0, clamp(pointer.vx * 140, -1, 1), 0.35);
           const driftY = lerp(-1, clamp(pointer.vy * 140, -1, 1), 0.25);
@@ -3168,9 +3204,10 @@
             // Larger fish & higher speed → slower turn (wider arc)
             const speedNorm = Math.min(1, currentSpeed / 10);
 
-            // Boost turn rate near mouse to facilitate orbiting/rings
-            const distToMouse = Math.hypot(pointer.x - f.x, pointer.y - f.y);
-            const turnBoost = distToMouse < 200 ? (1 + (200 - distToMouse) / 100) : 1;
+            // Boost turn rate near POI to facilitate orbiting/rings
+            const distToPOI = Math.hypot(pointOfInterest.x - f.x, pointOfInterest.y - f.y);
+            const turnBoost = distToPOI < 200 ? (1 + (200 - distToPOI) / 100) : 1;
+
 
             const baseTurn = (f.isLarge ? 0.0030 : 0.0048) * turnBoost;
             const turnRate = lerp(baseTurn * 1.35, baseTurn * 0.65, speedNorm);
@@ -3269,12 +3306,16 @@
         if (pointer.idle > 1000) {
           ctx.save();
           ctx.beginPath();
-          ctx.arc(pointOfInterest.x, pointOfInterest.y, 10 + Math.sin(t * 0.01) * 3, 0, 7);
-          ctx.strokeStyle = `rgba(180, 220, 255, ${0.1 + 0.2 * world.autonomousMode})`;
-          ctx.setLineDash([2, 4]);
+          ctx.arc(pointOfInterest.x, pointOfInterest.y, 14 + Math.sin(t * 0.01) * 4, 0, Math.PI * 2);
+          // More prominent rings when drifting/autonomous
+          const ringOpacity = lerp(0.12, 0.45, world.autonomousMode);
+          ctx.strokeStyle = `rgba(180, 220, 255, ${ringOpacity})`;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 6]);
           ctx.stroke();
           ctx.restore();
         }
+
 
         // Micro-surprises (spawn & update collectibles, fish fry, notifications)
 
