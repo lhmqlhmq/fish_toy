@@ -198,8 +198,10 @@
         time: 0,
         dayCycle: 0, // 0: night, 0.5: day, 1: night
         daySpeed: 0.0001,
-        lighting: 1.0
+        lighting: 1.0,
+        autonomousMode: 0 // 0 = following mouse, 1 = autonomous schooling
       };
+
 
       const seagrass = [];
       function initSeagrass() {
@@ -281,13 +283,19 @@
         const now = performance.now();
         const dt = Math.max(1, now - pointer.lastT);
         const nx = e.clientX, ny = e.clientY;
+
+        // Reset idle if mouse actually moved significantly
+        if (Math.hypot(nx - pointer.x, ny - pointer.y) > 0.5) {
+          pointer.idle = 0;
+          lastPointerMove = now;
+        }
+
         pointer.vx = (nx - pointer.x) / dt;
         pointer.vy = (ny - pointer.y) / dt;
         pointer.x = nx; pointer.y = ny; pointer.lastT = now;
-        pointer.idle = 0;
-        lastPointerMove = now;
         hintTimeoutArm();
       }, { passive: true });
+
 
       // ---------- Pointer Click Interaction ----------
       const collectibles = [];
@@ -295,7 +303,10 @@
       const collectionNotifications = [];
 
       addEventListener('pointerdown', (e) => {
+        pointer.idle = 0;
+        lastPointerMove = performance.now();
         const cx = e.clientX, cy = e.clientY;
+
         // Hit-test collectibles first (top interactive layer)
         for (let i = collectibles.length - 1; i >= 0; i--) {
           const c = collectibles[i];
@@ -2718,8 +2729,18 @@
         // Update migration system
         updateMigration(dt, t);
 
+        // Inactivity timer & Autonomous Mode transition
+        pointer.idle += dt;
+        const IDLE_THRESHOLD = 5000; // 5 seconds
+        if (pointer.idle > IDLE_THRESHOLD) {
+          world.autonomousMode = lerp(world.autonomousMode, 1.0, 0.02 * (dt / 16.67));
+        } else {
+          world.autonomousMode = lerp(world.autonomousMode, 0.0, 0.15 * (dt / 16.67));
+        }
+
         // Bubble spawn
         const mv = Math.hypot(pointer.vx, pointer.vy);
+
         const motion01 = clamp01(mv * 60);
 
         // Update overall ambiance based on activity
@@ -2792,11 +2813,38 @@
           const f = fish[i];
           let ax = 0, ay = 0; // Initialize at top
 
-          // --- Feature 3: Personalities ---
+          // --- Personalities & State Modulation ---
           let p_alignW = alignW;
           let p_cohW = cohW;
-          let p_attrW = plumeAttractW;
+          // Subtly reduce mouse attraction as autonomous mode increases
+          let p_attrW = plumeAttractW * (1 - world.autonomousMode * 0.95);
           let p_breakRate = 0.0018;
+
+          // If in autonomous mode, add attraction to a wandering group center
+          if (world.autonomousMode > 0.1) {
+            // A slowly wandering center point
+            const centerX = W * 0.5 + Math.sin(t * 0.0003) * W * 0.15;
+            const centerY = H * 0.45 + Math.cos(t * 0.0002) * H * 0.1;
+
+            const distToCenter = Math.hypot(centerX - f.x, centerY - f.y);
+            const centerUX = (centerX - f.x) / (distToCenter + 1);
+            const centerUY = (centerY - f.y) / (distToCenter + 1);
+
+            // Gentle pull back to center so they don't wander off
+            ax += centerUX * 0.15 * world.autonomousMode;
+            ay += centerUY * 0.15 * world.autonomousMode;
+
+            // Introduce a subtle rotation/milling force
+            const tangX = -centerUY, tangY = centerUX;
+            const orbitDir = f.orbitDir || 1;
+            ax += tangX * orbitDir * 0.25 * world.autonomousMode;
+            ay += tangY * orbitDir * 0.25 * world.autonomousMode;
+
+            // Increase internal cohesion to keep the school tight
+            p_cohW *= (1 + world.autonomousMode * 1.5);
+            p_alignW *= (1 + world.autonomousMode * 0.5);
+          }
+
 
           if (f.personality === 'curious') { p_attrW *= 1.6; p_cohW *= 0.5; }
           else if (f.personality === 'shy') {
