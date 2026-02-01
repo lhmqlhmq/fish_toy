@@ -215,7 +215,7 @@
         return f;
       }
 
-      let W, H, DPR, VIEW_SCALE;
+      let W = window.innerWidth, H = window.innerHeight, DPR = 1, VIEW_SCALE = 1;
       const world = {
         time: 0,
         dayCycle: 0, // 0: night, 0.5: day, 1: night
@@ -308,8 +308,8 @@
       addEventListener('resize', resize, { passive: true });
 
       // ---------- Pointer ----------
-      const pointer = { x: 0, y: 0, vx: 0, vy: 0, lastT: performance.now(), idle: 0 };
-      const pointOfInterest = { x: 0, y: 0 };
+      const pointer = { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5, vx: 0, vy: 0, lastT: performance.now(), idle: 0 };
+      const pointOfInterest = { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 };
       let lastPointerMove = performance.now();
       let lastClickT = 0;
 
@@ -415,32 +415,33 @@
             const p = (sr - d) / sr;
             const force = p * 18;
             // Overdrive max speed and suppress attraction temporarily
-            f.expansionBoost = 2.5;
-            f.suppressAttraction = 1200 + Math.random() * 600; // Increased suppression time to 1.2-1.8s
+            f.expansionBoost = 4.5; // Aggressive boost
+            f.suppressAttraction = 2000 + Math.random() * 800; // 2s - 2.8s suppression
             // Immediate heading update for visual snap
             f.heading = Math.atan2(f.vy, f.vx);
-            f.response = { type: 'shimmer', startTime: performance.now(), duration: 1500 };
+            f.response = { type: 'shimmer', startTime: performance.now(), duration: 2000 };
           }
         }
 
-        console.log("%c FLASH EXPANSION! %c Position:", "background: #f00; color: #fff; font-weight: bold;", "", cx, cy);
+        console.log("%c EXTRA-AGGERATED FLASH EXPANSION! %c", "background: #f00; color: #fff; font-size: 14px; font-weight: bold;", "");
 
         // --- Visual Shockwave ---
-        events.flashTimer = 500; // Visual screen flash
+        events.flashTimer = 800; // Screen flash
         events.active.push({
           type: EVENT_TYPES.PRESSURE_WAVE,
           x: cx, y: cy,
           dx: 0, dy: 0,
           speed: 0,
-          radius: Math.min(W, H) * 0.7,
-          strength: 12.0, // Aggressive scatter
-          life: 0, maxLife: 1000,
-          riseTime: 50, fadeTime: 900,
+          radius: Math.max(W, H) * 1.5, // Covers everything
+          strength: 40.0, // Massive scatter force
+          life: 0, maxLife: 1500,
+          riseTime: 30, fadeTime: 1400,
           compressionPhase: 0,
           intensity: 1.0
         });
 
         spawnBubbleCluster(cx, cy);
+
         if (soundOn && audio) {
           // Low frequency "thump" via bubbleTick with lower pitch/tone if possible
           audio.bubbleTick(0.9);
@@ -1676,7 +1677,7 @@
 
       // Draw school flash effect when turning
       function drawSchoolFlash() {
-        if (!migration.flashIntensity || migration.flashIntensity < 0.05 || !isFinite(migration.centerX)) return;
+        if (!migration.flashIntensity || migration.flashIntensity < 0.05 || !isFinite(migration.centerX) || !isFinite(migration.centerY)) return;
 
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
@@ -2852,8 +2853,17 @@
 
         // Calculate Point of Interest (POI)
         // Blends between pointer and wandering center based on autonomousMode
-        const autonomousX = W * 0.5 + Math.sin(t * 0.0003) * W * 0.15;
-        const autonomousY = H * 0.45 + Math.cos(t * 0.0002) * H * 0.1;
+        // Pathing: wide-range noise-based wander
+        const nwX = (fbm(t * 0.00015, 1.2) - 0.5) * 2;
+        const nwY = (fbm(t * 0.00018, 2.3) - 0.5) * 2;
+        const autonomousX = W * 0.5 + nwX * W * 0.42;
+        const autonomousY = H * 0.5 + nwY * H * 0.38;
+
+        // Debug log start of idle transition once
+        if (pointer.idle > IDLE_THRESHOLD && pointer.idle < IDLE_THRESHOLD + 20 && world.autonomousMode < 0.1) {
+          console.log("%c IDLE DETECTED - Initiating Autonomous Wandering %c", "color: #0af; font-weight: bold;", "");
+        }
+
         pointOfInterest.x = lerp(pointer.x, autonomousX, world.autonomousMode);
         pointOfInterest.y = lerp(pointer.y, autonomousY, world.autonomousMode);
 
