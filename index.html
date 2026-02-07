@@ -1242,56 +1242,75 @@
             my = H * 0.5;
           }
 
-          // BIOLOGICAL HUNTING: Wide spiraling corral followed by quick strike
-          s.wanderPhase += dt * 0.0004;
-          const corralRadiusX = 500 + Math.sin(s.wanderPhase * 0.5) * 150;
-          const corralRadiusY = 350 + Math.cos(s.wanderPhase * 0.7) * 100;
-
-          s.targetOffsetX = Math.cos(s.wanderPhase) * corralRadiusX;
-          s.targetOffsetY = Math.sin(s.wanderPhase) * corralRadiusY;
-
-          const dx = (mx + s.targetOffsetX) - s.x;
-          const dy = (my + s.targetOffsetY) - s.y;
-
-          const dist = Math.hypot(dx, dy) || 1;
-
-          if (!s.state) s.state = "CHASING";
-          if (!s.stateTimer) s.stateTimer = 4000;
+          // BIOLOGICAL STATE MACHINE
+          if (!s.state) {
+            s.state = "PATROLLING";
+            s.stateTimer = 5000 + Math.random() * 3000;
+          }
           s.stateTimer -= dt;
 
-          let moveSpd = 4.0;
+          let moveSpd = 1.4;
 
-          if (s.state === "CHASING") {
-            // SLOW PROWLING
-            moveSpd = 1.6 + (dist < 1000 ? (1.0 - dist / 1000) * 1.5 : 0);
-            if (dist < 350 && s.stateTimer < 0) {
-              s.state = "LUNGING";
-              s.stateTimer = 1400;
+          // 1. PATROLLING: Slow circle at distance
+          if (s.state === "PATROLLING") {
+            const angle = s.wanderPhase * 0.4;
+            s.targetOffsetX = Math.cos(angle) * 700;
+            s.targetOffsetY = Math.sin(angle) * 550;
+            moveSpd = 1.4 + (Math.hypot(s.x - mx, s.y - my) < 400 ? 0.8 : 0);
+            if (s.stateTimer < 0) {
+              s.state = "COILING";
+              s.stateTimer = 6000 + Math.random() * 4000;
             }
-          } else if (s.state === "LUNGING") {
-            // SUDDEN STRIKE
-            moveSpd = 8.8;
-            // Charge directly through center during lunge
-            const lungeDx = mx - s.x, lungeDy = my - s.y;
-            const lungeH = Math.atan2(lungeDy, lungeDx);
+          }
+          // 2. COILING: Spiral in, compressing the ball
+          else if (s.state === "COILING") {
+            const spiralProg = 1 - Math.max(0, s.stateTimer / 8000);
+            const angle = s.wanderPhase * (0.5 + spiralProg * 0.3);
+            const radiusX = 650 * (1 - spiralProg * 0.7);
+            const radiusY = 500 * (1 - spiralProg * 0.7);
+            s.targetOffsetX = Math.cos(angle) * radiusX;
+            s.targetOffsetY = Math.sin(angle) * radiusY;
+            moveSpd = 1.8 + spiralProg * 1.5;
+            if (s.stateTimer < 0 || Math.hypot(s.x - mx, s.y - my) < 180) {
+              s.state = "LUNGING";
+              s.stateTimer = 1200; // Fast strike
+            }
+          }
+          // 3. LUNGING: High speed strike through center
+          else if (s.state === "LUNGING") {
+            moveSpd = 9.5;
+            // Lock heading towards center for the strike
+            const lungeH = Math.atan2(my - s.y, mx - s.x);
             let ladiff = lungeH - s.heading;
             while (ladiff > Math.PI) ladiff -= Math.PI * 2;
             while (ladiff < -Math.PI) ladiff += Math.PI * 2;
-            s.heading += ladiff * 0.05; // Committed path
-
-            if (s.stateTimer <= 0) {
-              s.state = "CHASING";
-              s.stateTimer = 4000 + Math.random() * 3000;
+            s.heading += ladiff * 0.06; // Committed path
+            if (s.stateTimer < 0) {
+              s.state = "RECOVERING";
+              s.stateTimer = 3000;
+            }
+          }
+          // 4. RECOVERING: Slow glide after punch
+          else if (s.state === "RECOVERING") {
+            moveSpd = 4.0 * (s.stateTimer / 3000) + 0.8;
+            if (s.stateTimer < 0) {
+              s.state = "PATROLLING";
+              s.stateTimer = 6000 + Math.random() * 4000;
             }
           }
 
-          // Heading update - snappy to track fast fish
+          const dx = (mx + (s.targetOffsetX || 0)) - s.x;
+          const dy = (my + (s.targetOffsetY || 0)) - s.y;
+          const dist = Math.hypot(dx, dy) || 1;
+
+          // Heading update (Inertia focused)
           if (s.state !== "LUNGING") {
             const targetH = Math.atan2(dy, dx);
             let adiff = targetH - s.heading;
             while (adiff > Math.PI) adiff -= Math.PI * 2;
             while (adiff < -Math.PI) adiff += Math.PI * 2;
-            s.heading += adiff * 0.035; // Heavy inertia
+            const turnSpeed = s.state === "RECOVERING" ? 0.01 : 0.03;
+            s.heading += adiff * turnSpeed;
           }
 
           s.vx = Math.cos(s.heading) * moveSpd;
@@ -1354,28 +1373,42 @@
         if (!predator.active || !predator.shark) return { fx: 0, fy: 0 };
         const s = predator.shark;
 
-
         const dx = f.x - s.x, dy = f.y - s.y;
         const dist = Math.hypot(dx, dy) || 1;
 
-        // PANIC RESPONSE: Defensive balling - moderate repulsion, extreme cohesion
-        const isLunge = s.state === "LUNGING";
-        const repStr = isLunge ? 40.0 : 20.0; // Lowered to keep school from exploding
-        const range = isLunge ? 580 : 450;    // Wide sensing, but gentle push
+        // BIOLOGICAL VACUOLE EFFECT:
+        // 1. Extreme push when very close (clearing the body)
+        // 2. "Holding" pull at the vacuum edge to keep ball together
+        const isStrike = s.state === "LUNGING";
+        const bodyRange = isStrike ? 140 : 100;
+        const vacuumRange = isStrike ? 480 : 350;
 
         let fx = 0, fy = 0;
-        if (dist < range) {
-          const ratio = (1 - dist / range) ** 2;
-          fx = (dx / dist) * ratio * repStr;
-          fy = (dy / dist) * ratio * repStr;
+        if (dist < vacuumRange) {
+          if (dist < bodyRange) {
+            // Hard Repulsion (Inside the shark)
+            const ratio = (1 - dist / bodyRange) ** 1.5;
+            fx = (dx / dist) * ratio * (isStrike ? 180 : 100);
+            fy = (dy / dist) * ratio * (isStrike ? 180 : 100);
+          } else {
+            // VACUOLE PULL: Pull fish towards the edge of the path to maintain the "ball"
+            const vacuumMid = (bodyRange + vacuumRange) * 0.45;
+            const pullRatio = Math.max(0, 1 - Math.abs(dist - vacuumMid) / (vacuumRange - bodyRange));
+            const cdx = migration.centerX - f.x, cdy = migration.centerY - f.y;
+            const cd = Math.hypot(cdx, cdy) || 1;
 
-          // Swirl and focus induction (SUPREME school concentration)
+            // Pull slightly sideways and towards school center to "reform" the wall
+            const concentrate = (isStrike ? 60 : 35) * pullRatio;
+            fx = (cdx / cd) * concentrate;
+            fy = (cdy / cd) * concentrate;
+          }
+
+          // Add swirl for dynamic "bait ball" look
           const cdx = migration.centerX - f.x, cdy = migration.centerY - f.y;
           const cd = Math.hypot(cdx, cdy) || 1;
-          const swirlStr = (isLunge ? 40.0 : 25.0) * (1 - dist / range);
-          const concentrateStr = (isLunge ? 120.0 : 80.0) * (1 - dist / range);
-          fx += (-cdy / cd) * swirlStr + (cdx / cd) * concentrateStr;
-          fy += (cdx / cd) * swirlStr + (cdy / cd) * concentrateStr;
+          const swirl = (isStrike ? 50 : 25) * (1 - dist / vacuumRange);
+          fx += (-cdy / cd) * swirl;
+          fy += (cdx / cd) * swirl;
         }
         return { fx, fy };
       }
