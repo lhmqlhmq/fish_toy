@@ -1157,211 +1157,198 @@
       // ============================================================
       const predator = {
         active: false,
-        timer: 5000, // Wait 5s by default
-        shark: null,
+        sharks: [], // Support multiple sharks
+        timer: 5000,
         lightWaves: [],
         victoryFlash: 0
       };
 
       function spawnPredator() {
+        if (predator.sharks.length >= 3) return; // PRD Cap: 3 sharks
+
         const side = randInt(0, 3);
         let sx, sy, entryDx, entryDy;
-        if (side === 0) { sx = 50; sy = rand(H * 0.2, H * 0.8); entryDx = 1; entryDy = 0; }
-        else if (side === 1) { sx = W - 50; sy = rand(H * 0.2, H * 0.8); entryDx = -1; entryDy = 0; }
-        else if (side === 2) { sx = rand(W * 0.2, W * 0.8); sy = 50; entryDx = 0; entryDy = 1; }
-        else { sx = rand(W * 0.2, W * 0.8); sy = H - 50; entryDx = 0; entryDy = -1; }
+        // Spawning from different edges based on shark count to avoid overlap
+        const idx = predator.sharks.length;
+        if (side === 0) { sx = -150; sy = H * (0.3 + idx * 0.2); entryDx = 1; entryDy = 0; }
+        else if (side === 1) { sx = W + 150; sy = H * (0.3 + idx * 0.2); entryDx = -1; entryDy = 0; }
+        else if (side === 2) { sx = W * (0.3 + idx * 0.2); sy = -150; entryDx = 0; entryDy = 1; }
+        else { sx = W * (0.3 + idx * 0.2); sy = H + 150; entryDx = 0; entryDy = -1; }
 
-
-
-        predator.shark = {
+        const newShark = {
+          id: Math.random(),
           x: sx, y: sy,
+          vx: 0, vy: 0,
           entryDx, entryDy,
-          targetX: sx + entryDx * 800,
-          targetY: sy + entryDy * 800,
           life: 0,
-          maxLife: 35000, // Longer presence for herding behavior
-          fleeMeter: 0,
+          maxLife: 25000 + Math.random() * 10000,
           fleeing: false,
           fleeProgress: 0,
           phase: rand(0, Math.PI * 2),
-          entryProgress: 1.0, // FORCE INSTANT VISIBILITY
           heading: Math.atan2(entryDy, entryDx),
           targetOffsetX: 0,
           targetOffsetY: 0,
-          wanderPhase: rand(0, 1000)
+          wanderPhase: rand(0, 1000),
+          state: "APPROACHING", // New PRD Start State
+          stateTimer: 2000,
+          attackCount: 0,
+          slashing: 0 // For saw nose movement
         };
+
+        predator.sharks.push(newShark);
         predator.active = true;
         events.flashTimer = 600;
         if (soundOn && audio) audio.predatorApproach();
       }
 
-
-
-
       function updatePredatorSystem(dt) {
-        if (!predator.active) {
-          // Only spawn if mouse has been idle for at least 5 seconds
-          if (pointer.idle > 5000) {
+        // Trigger 1: User Inactivity (Shark Entry)
+        if (pointer.idle > 5000) {
+          if (predator.sharks.length < 3) {
             predator.timer -= dt;
             if (predator.timer <= 0) {
               spawnPredator();
-              predator.timer = rand(15000, 30000);
+              // Staggered delay for additional sharks: 5-10s
+              predator.timer = 5000 + Math.random() * 5000;
             }
-          } else {
-            // If mouse moves, reset the shark spawn timer
-            predator.timer = 5000;
           }
+        } else {
+          // Trigger 2: User Activity (Shark Exit)
+          // If mouse moves, all existing sharks must retreat immediately
+          let anyFleeing = false;
+          for (const s of predator.sharks) {
+            if (!s.fleeing) {
+              s.fleeing = true;
+              s.fleeProgress = 0;
+              // Retreat direction: away from school, towards nearest edge
+              s.exitDx = s.x < W * 0.5 ? -1 : 1;
+              s.exitDy = s.y < H * 0.5 ? -0.5 : 0.5;
+              anyFleeing = true;
+            }
+          }
+          if (anyFleeing && soundOn && audio) {
+            // Predator startled sound or reuse approach? Usually just visual exit
+          }
+          predator.timer = 5000; // Reset spawn timer
         }
       }
 
       function updatePredator(dt) {
-        if (predator.shark && (isNaN(predator.shark.x) || isNaN(predator.shark.y))) { predator.active = false; predator.shark = null; return; }
-        if (!predator.active || !predator.shark) return;
-        const s = predator.shark;
+        if (!predator.active || predator.sharks.length === 0) return;
 
-        if (typeof s.heading === 'undefined' || isNaN(s.heading)) {
-          s.heading = Math.atan2(s.entryDy, s.entryDx) || 0;
-          // console.log("Fixed undefined heading");
+        // Cleanup sharks that are far off-screen and fleeing
+        for (let i = predator.sharks.length - 1; i >= 0; i--) {
+          const s = predator.sharks[i];
+          if (s.fleeing && (s.x < -1000 || s.x > W + 1000 || s.y < -1000 || s.y > H + 1000)) {
+            predator.sharks.splice(i, 1);
+          }
+        }
+        if (predator.sharks.length === 0) {
+          predator.active = false;
+          return;
         }
 
-        if (!window.sharkLogThrottle) window.sharkLogThrottle = 0;
-        window.sharkLogThrottle++;
+        const mx = migration.centerX || W * 0.5;
+        const my = migration.centerY || H * 0.5;
 
-
-        s.life += dt;
-        if (s.entryProgress < 1) s.entryProgress = Math.min(1, s.entryProgress + dt / 1000);
-
-        if (!s.fleeing) {
-          // Predator targeting: always school center
-
-          // SAFETY CHECK: Handle NaN migration center
-          let mx = migration.centerX;
-          let my = migration.centerY;
-          if (isNaN(mx) || isNaN(my)) {
-            mx = W * 0.5;
-            my = H * 0.5;
-          }
-
-          // BIOLOGICAL STATE MACHINE
-          if (!s.state) {
-            s.state = "PATROLLING";
-            s.stateTimer = 5000 + Math.random() * 3000;
-          }
+        for (const s of predator.sharks) {
+          s.life += dt;
           s.stateTimer -= dt;
 
-          let moveSpd = 1.4;
+          if (!s.fleeing) {
+            // SAWSHARK AI CYCLE
+            let moveSpd = 3.0; // Cruise speed
 
-          // 1. PATROLLING: Slow circle at distance (REDUCED RADIUS for visibility)
-          if (s.state === "PATROLLING") {
-            const angle = s.wanderPhase * 0.4;
-            s.targetOffsetX = Math.cos(angle) * 420;
-            s.targetOffsetY = Math.sin(angle) * 320;
-            moveSpd = 1.4 + (Math.hypot(s.x - mx, s.y - my) < 300 ? 0.8 : 0);
-            if (s.stateTimer < 0) {
-              s.state = "COILING";
-              s.stateTimer = 6000 + Math.random() * 4000;
+            if (s.state === "APPROACHING") {
+              // Rapid entry/approach towards school
+              moveSpd = 5.5;
+              const adx = mx - s.x, ady = my - s.y;
+              s.targetOffsetX = adx; s.targetOffsetY = ady;
+              if (Math.hypot(adx, ady) < 250 || s.stateTimer < 0) {
+                s.state = "ATTACKING";
+                s.stateTimer = 1500; // Attack sprint duration
+                s.attackDirX = adx; s.attackDirY = ady; // Lock direction for sprint
+                const d = Math.hypot(adx, ady) || 1;
+                s.attackDirX /= d; s.attackDirY /= d;
+              }
             }
-          }
-          // 2. COILING: Spiral in, compressing the ball (MODERATED)
-          else if (s.state === "COILING") {
-            const spiralProg = 1 - Math.max(0, s.stateTimer / 8000);
-            const angle = s.wanderPhase * (0.5 + spiralProg * 0.3);
-            const radiusX = 420 * (1 - spiralProg * 0.5);
-            const radiusY = 320 * (1 - spiralProg * 0.5);
-            s.targetOffsetX = Math.cos(angle) * radiusX;
-            s.targetOffsetY = Math.sin(angle) * radiusY;
-            moveSpd = 1.8 + spiralProg * 1.5;
-            if (s.stateTimer < 0 || Math.hypot(s.x - mx, s.y - my) < 180) {
-              s.state = "LUNGING";
-              s.stateTimer = 1200; // Fast strike
+            else if (s.state === "ATTACKING") {
+              // Attack Sprint: Near-linear and fast
+              moveSpd = 9.8;
+              s.targetOffsetX = s.attackDirX * 1000;
+              s.targetOffsetY = s.attackDirY * 1000;
+              // Saw Slashing effect: fast head wiggle
+              s.slashing = Math.sin(s.life * 0.05) * 0.45;
+              if (s.stateTimer < 0) {
+                s.state = "TURNING";
+                s.stateTimer = 3000 + Math.random() * 2000;
+                s.attackCount++;
+              }
             }
-          }
-          // 3. LUNGING: High speed strike through center
-          else if (s.state === "LUNGING") {
-            moveSpd = 9.5;
-            // Lock heading towards center for the strike
-            const lungeH = Math.atan2(my - s.y, mx - s.x);
-            let ladiff = lungeH - s.heading;
-            while (ladiff > Math.PI) ladiff -= Math.PI * 2;
-            while (ladiff < -Math.PI) ladiff += Math.PI * 2;
-            s.heading += ladiff * 0.06; // Committed path
-            if (s.stateTimer < 0) {
-              s.state = "RECOVERING";
-              s.stateTimer = 3000;
+            else if (s.state === "TURNING") {
+              // Post-Attack Turn: Repositioning
+              moveSpd = 3.2;
+              const angle = s.wanderPhase + s.life * 0.001;
+              s.targetOffsetX = Math.cos(angle) * 400 + (mx - s.x);
+              s.targetOffsetY = Math.sin(angle) * 400 + (my - s.y);
+              s.slashing *= 0.92; // Dampen slash
+              if (s.stateTimer < 0) {
+                if (s.attackCount >= 4 || s.life > 20000) {
+                  s.fleeing = true; s.fleeProgress = 0;
+                  s.exitDx = s.x < W * 0.5 ? -1 : 1; s.exitDy = (Math.random() - 0.5) * 0.5;
+                } else {
+                  s.state = "APPROACHING";
+                  s.stateTimer = 4000;
+                }
+              }
             }
-          }
-          // 4. RECOVERING: Slow glide after punch
-          else if (s.state === "RECOVERING") {
-            moveSpd = 4.0 * (s.stateTimer / 3000) + 0.8;
-            if (s.stateTimer < 0) {
-              s.state = "PATROLLING";
-              s.stateTimer = 6000 + Math.random() * 4000;
-            }
-          }
 
-          const dx = (mx + (s.targetOffsetX || 0)) - s.x;
-          const dy = (my + (s.targetOffsetY || 0)) - s.y;
-          const dist = Math.hypot(dx, dy) || 1;
-
-          // Heading update (Inertia focused)
-          if (s.state !== "LUNGING") {
+            const dx = (s.targetOffsetX || 0);
+            const dy = (s.targetOffsetY || 0);
             const targetH = Math.atan2(dy, dx);
+
+            // Steering with inertia
             let adiff = targetH - s.heading;
             while (adiff > Math.PI) adiff -= Math.PI * 2;
             while (adiff < -Math.PI) adiff += Math.PI * 2;
-            const turnSpeed = s.state === "RECOVERING" ? 0.01 : 0.03;
-            s.heading += adiff * turnSpeed;
+
+            const turnLimit = s.state === "ATTACKING" ? 0.02 : 0.06;
+            s.heading += adiff * turnLimit;
+
+            // Inter-shark avoidance
+            for (const other of predator.sharks) {
+              if (other === s) continue;
+              const separationX = s.x - other.x, separationY = s.y - other.y;
+              const sepD2 = separationX * separationX + separationY * separationY;
+              if (sepD2 < 150 * 150) {
+                const sepD = Math.sqrt(sepD2) || 1;
+                s.vx += (separationX / sepD) * 0.2;
+                s.vy += (separationY / sepD) * 0.2;
+              }
+            }
+
+            s.vx = (s.vx + Math.cos(s.heading) * moveSpd) * 0.5;
+            s.vy = (s.vy + Math.sin(s.heading) * moveSpd) * 0.5;
+
+          } else {
+            // Fleeing logic
+            s.fleeProgress = Math.min(1, s.fleeProgress + dt / 800);
+            const spd = (3.0 + s.fleeProgress * 4.0);
+            const targetHeading = Math.atan2(s.exitDy || 0, s.exitDx || -1);
+            let angleDiff = targetHeading - s.heading;
+            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+            s.heading += angleDiff * 0.05;
+            s.vx = Math.cos(s.heading) * spd;
+            s.vy = Math.sin(s.heading) * spd;
           }
 
-          s.vx = Math.cos(s.heading) * moveSpd;
-          s.vy = Math.sin(s.heading) * moveSpd;
-
-          // Movement update
           s.x += s.vx * dt * 0.15;
           s.y += s.vy * dt * 0.15;
-          s.phase += dt * (0.01 + moveSpd * 0.008);
-
-          // Interaction (flee/exit logic)
-          const curDist = Math.hypot(pointer.x - s.x, pointer.y - s.y);
-
-          // SCARING AWAY: Trigger exit if user moves mouse/touches
-          if (pointer.idle < 500 && s.entryProgress > 0.5) {
-            s.fleeing = true; s.fleeProgress = 0;
-            s.exitDx = s.x < W * 0.5 ? -1 : 1;
-            s.exitDy = (Math.random() - 0.5) * 0.5;
-          } else if (curDist < 260 && s.entryProgress > 0.45) {
-            if (Math.random() < dt * 0.0038)
-              predator.lightWaves.push({ x: pointer.x, y: pointer.y, r: 0, life: 0, maxLife: 680 });
-            s.fleeMeter += (1 - curDist / 260) ** 2 * dt * 0.00015;
-          }
-
-          if (s.fleeMeter >= 1 || s.life >= s.maxLife) {
-            s.fleeing = true; s.fleeProgress = 0;
-            s.exitDx = s.x < W * 0.5 ? -1 : 1;
-            s.exitDy = (Math.random() - 0.5) * 0.6;
-            if (s.fleeMeter >= 1) predator.victoryFlash = 720;
-          }
-
-          // Screen wrap protection
-          if (s.x < -800) s.x = W + 800; else if (s.x > W + 800) s.x = -800;
-          if (s.y < -800) s.y = H + 800; else if (s.y > H + 800) s.y = -800;
-        } else {
-          // Fleeing logic
-          s.fleeProgress = Math.min(1, s.fleeProgress + dt / 1200);
-          const spd = (1.5 + s.fleeProgress * 2.0) * s.entryProgress;
-          const targetHeading = Math.atan2(s.exitDy || 0, s.exitDx || -1);
-          let angleDiff = targetHeading - s.heading;
-          while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-          while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-          s.heading += angleDiff * 0.08;
-          s.x += Math.cos(s.heading) * spd * dt * 0.1;
-          s.y += Math.sin(s.heading) * spd * dt * 0.1;
-          if (s.x < -600 || s.x > W + 600 || s.y < -600 || s.y > H + 600) {
-            predator.active = false; predator.shark = null;
-          }
+          s.phase += dt * (0.01 + Math.hypot(s.vx, s.vy) * 0.008);
         }
 
-        // Light-wave ring lifecycle
+        // Light-wave ring lifecycle (shared)
         for (let i = predator.lightWaves.length - 1; i >= 0; i--) {
           const w = predator.lightWaves[i];
           w.life += dt; w.r = (w.life / w.maxLife) * 170;
@@ -1370,144 +1357,130 @@
       }
 
       function getPredatorForce(f) {
-        if (!predator.active || !predator.shark) return { fx: 0, fy: 0 };
-        const s = predator.shark;
+        if (!predator.active || predator.sharks.length === 0) return { fx: 0, fy: 0 };
 
-        const dx = f.x - s.x, dy = f.y - s.y;
-        const dist = Math.hypot(dx, dy) || 1;
+        let totalFx = 0, totalFy = 0;
 
-        // BIOLOGICAL VACUOLE EFFECT:
-        // 1. Extreme push when very close (clearing the body)
-        // 2. "Holding" pull at the vacuum edge to keep ball together
-        const isStrike = s.state === "LUNGING";
-        const bodyRange = isStrike ? 140 : 100;
-        const vacuumRange = isStrike ? 480 : 350;
+        for (const s of predator.sharks) {
+          const dx = f.x - s.x, dy = f.y - s.y;
+          const dist = Math.hypot(dx, dy) || 1;
 
-        let fx = 0, fy = 0;
-        if (dist < vacuumRange) {
-          if (dist < bodyRange) {
-            // Hard Repulsion (Inside the shark)
-            const ratio = (1 - dist / bodyRange) ** 1.8;
-            fx = (dx / dist) * ratio * (isStrike ? 160 : 85);
-            fy = (dy / dist) * ratio * (isStrike ? 160 : 85);
-          } else {
-            // VACUOLE FORMATION: Smooth clearing and reforming
-            const vacuumMid = (bodyRange + vacuumRange) * 0.5;
-            const pullRatio = Math.max(0, 1 - Math.abs(dist - vacuumMid) / (vacuumRange - bodyRange));
+          const isStrike = s.state === "ATTACKING";
+          const bodyRange = isStrike ? 140 : 100;
+          const vacuumRange = isStrike ? 480 : 350;
 
-            // Pull slightly sideways and AWAY to create the "ring" wall
-            const concentrate = (isStrike ? 45 : 25) * pullRatio;
-            const nx = -dy / dist, ny = dx / dist; // Perpendicular
-            fx = (dx / dist) * concentrate * 0.5 + nx * concentrate * 0.3;
-            fy = (dy / dist) * concentrate * 0.5 + ny * concentrate * 0.3;
+          if (dist < vacuumRange) {
+            if (dist < bodyRange) {
+              const ratio = (1 - dist / bodyRange) ** 1.8;
+              totalFx += (dx / dist) * ratio * (isStrike ? 160 : 85);
+              totalFy += (dy / dist) * ratio * (isStrike ? 160 : 85);
+            } else {
+              const vacuumMid = (bodyRange + vacuumRange) * 0.5;
+              const pullRatio = Math.max(0, 1 - Math.abs(dist - vacuumMid) / (vacuumRange - bodyRange));
+              const concentrate = (isStrike ? 45 : 25) * pullRatio;
+              const nx = -dy / dist, ny = dx / dist;
+              totalFx += (dx / dist) * concentrate * 0.5 + nx * concentrate * 0.3;
+              totalFy += (dy / dist) * concentrate * 0.5 + ny * concentrate * 0.3;
+            }
+
+            const cdx = migration.centerX - f.x, cdy = migration.centerY - f.y;
+            const cd = Math.hypot(cdx, cdy) || 1;
+            const swirl = (isStrike ? 50 : 25) * (1 - dist / vacuumRange);
+            totalFx += (-cdy / cd) * swirl;
+            totalFy += (cdx / cd) * swirl;
           }
-
-          // Add swirl for dynamic "bait ball" look
-          const cdx = migration.centerX - f.x, cdy = migration.centerY - f.y;
-          const cd = Math.hypot(cdx, cdy) || 1;
-          const swirl = (isStrike ? 50 : 25) * (1 - dist / vacuumRange);
-          fx += (-cdy / cd) * swirl;
-          fy += (cdx / cd) * swirl;
         }
-        return { fx, fy };
+        return { fx: totalFx, fy: totalFy };
       }
       function drawPredator() {
-        if (!predator.active || !predator.shark) return;
-        const s = predator.shark;
+        if (!predator.active || predator.sharks.length === 0) return;
 
-        const entryA = Math.min(1, s.entryProgress);
-        const fleeA = s.fleeing ? Math.max(0, 1 - s.fleeProgress * 1.9) : 1;
-        const alpha = entryA * fleeA;
-        // if (alpha < 0.004) return; // FORCED VISIBLE
+        for (const s of predator.sharks) {
+          const fleeA = s.fleeing ? Math.max(0, 1 - s.fleeProgress * 1.9) : 1;
+          const alpha = fleeA;
 
+          ctx.save();
+          ctx.translate(s.x, s.y);
+          // Sawshark horizontal body, but with head slashing (s.slashing)
+          ctx.rotate(s.heading + Math.sin(s.phase) * 0.05 + s.slashing);
 
+          const sz = 80;
+          const bw = Math.sin(s.phase * 1.8) * 0.04;
 
+          // 1. Glow
+          ctx.globalCompositeOperation = 'screen';
+          const pulse = 0.85 + 0.15 * Math.sin(s.phase * 2.2);
+          const gg = ctx.createRadialGradient(0, 0, 10, 0, 0, 180 * pulse);
+          gg.addColorStop(0, `rgba(40, 80, 120, ${alpha * 0.2})`);
+          gg.addColorStop(1, 'transparent');
+          ctx.fillStyle = gg;
+          ctx.beginPath(); ctx.arc(0, 0, 180 * pulse, 0, Math.PI * 2); ctx.fill();
+          ctx.globalCompositeOperation = 'source-over';
 
-        ctx.save();
-        ctx.translate(s.x, s.y);
-        // Synchronize rotation with AI heading, adding a subtle swim wobble
-        ctx.rotate((s.heading || Math.atan2(s.entryDy, s.entryDx)) + Math.sin(s.phase) * 0.08);
+          // 2. Body
+          ctx.globalAlpha = alpha;
 
-        const sz = 77; // Reduced size by 30% from 110
-        const bw = Math.sin(s.phase * 1.8) * 0.04;
-
-        // 1. Threat Glow (Deep Blue Predator Aura)
-        ctx.globalCompositeOperation = 'screen';
-        const pulse = 0.85 + 0.15 * Math.sin(s.phase * 2.2);
-        const gg = ctx.createRadialGradient(0, 0, 10, 0, 0, 220 * pulse);
-        gg.addColorStop(0, `rgba(40, 80, 120, ${alpha * 0.25})`);
-        gg.addColorStop(1, 'transparent');
-        ctx.fillStyle = gg;
-        ctx.beginPath(); ctx.arc(0, 0, 220 * pulse, 0, Math.PI * 2); ctx.fill();
-        ctx.globalCompositeOperation = 'source-over';
-
-        // 2. Body Drawing (High Detail Two-Tone)
-        ctx.globalAlpha = alpha;
-
-        // Render layers for dark back and light belly
-        const renderLayer = (isBelly) => {
+          // Saw Rostrum (The "Saw" nose)
+          ctx.fillStyle = '#1a2a3a';
           ctx.beginPath();
-          if (isBelly) {
-            ctx.fillStyle = '#f0f5ff'; // Pale underbelly
-            ctx.moveTo(sz * 1.0, 0);
-            ctx.quadraticCurveTo(sz * 0.4, sz * 0.35 + bw * sz, -sz * 0.8, 0);
-            ctx.lineTo(sz * 1.0, 0);
-          } else {
-            ctx.fillStyle = '#1a2a3a'; // Dark predator grey
-            ctx.moveTo(sz * 1.0, 0);
-            ctx.quadraticCurveTo(sz * 0.4, -sz * 0.38 + bw * sz, -sz * 0.8, 0);
-            ctx.lineTo(sz * 1.0, 0);
-          }
+          ctx.moveTo(sz * 1.0, -sz * 0.04);
+          ctx.lineTo(sz * 2.1, -sz * 0.02); // Long rostrum
+          ctx.lineTo(sz * 2.1, sz * 0.02);
+          ctx.lineTo(sz * 1.0, sz * 0.04);
           ctx.fill();
-        };
 
-        renderLayer(false); // Back
-        renderLayer(true);  // Belly
+          // Teeth on the saw
+          ctx.strokeStyle = '#f0f5ff';
+          ctx.lineWidth = 1;
+          for (let i = 0; i < 11; i++) {
+            const tx = sz * 1.1 + i * (sz * 0.09);
+            ctx.beginPath();
+            ctx.moveTo(tx, -sz * 0.03); ctx.lineTo(tx - 2, -sz * 0.08);
+            ctx.moveTo(tx, sz * 0.03); ctx.lineTo(tx - 2, sz * 0.08);
+            ctx.stroke();
+          }
 
-        // Gills (3 distinct dark slits)
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-        ctx.lineWidth = 1.6;
-        for (let i = 0; i < 3; i++) {
-          const gx = sz * 0.55 - i * 6;
+          // Main Body
+          const renderLayer = (isBelly) => {
+            ctx.beginPath();
+            if (isBelly) {
+              ctx.fillStyle = '#f0f5ff';
+              ctx.moveTo(sz * 1.0, 0);
+              ctx.quadraticCurveTo(sz * 0.4, sz * 0.35 + bw * sz, -sz * 0.8, 0);
+              ctx.lineTo(sz * 1.0, 0);
+            } else {
+              ctx.fillStyle = '#1a2a3a';
+              ctx.moveTo(sz * 1.0, 0);
+              ctx.quadraticCurveTo(sz * 0.4, -sz * 0.38 + bw * sz, -sz * 0.8, 0);
+              ctx.lineTo(sz * 1.0, 0);
+            }
+            ctx.fill();
+          };
+          renderLayer(false); renderLayer(true);
+
+          // Fins & Details
+          ctx.fillStyle = '#1a2a3a';
+          // Dorsal
+          ctx.beginPath(); ctx.moveTo(sz * 0.2, -sz * 0.25); ctx.quadraticCurveTo(sz * 0.0, -sz * 0.7, -sz * 0.3, -sz * 0.25); ctx.fill();
+          // Pectorals
+          ctx.beginPath(); ctx.moveTo(sz * 0.45, sz * 0.15); ctx.lineTo(sz * 0.1, sz * 0.55); ctx.lineTo(-sz * 0.1, sz * 0.2); ctx.fill();
+          ctx.beginPath(); ctx.moveTo(sz * 0.45, -sz * 0.15); ctx.lineTo(sz * 0.1, -sz * 0.55); ctx.lineTo(-sz * 0.1, -sz * 0.2); ctx.fill();
+
+          // Eye
+          ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(sz * 0.82, -sz * 0.06, 2.8, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(sz * 0.83, -sz * 0.07, 1.0, 0, Math.PI * 2); ctx.fill();
+
+          // Tail
+          const tWave = Math.sin(s.phase * 2.0) * 12;
           ctx.beginPath();
-          ctx.moveTo(gx, -sz * 0.08);
-          ctx.lineTo(gx - 2, sz * 0.12);
-          ctx.stroke();
+          ctx.moveTo(-sz * 0.75, 0);
+          ctx.lineTo(-sz * 1.15, -sz * 0.45 + tWave);
+          ctx.lineTo(-sz * 0.9, 0);
+          ctx.lineTo(-sz * 1.15, sz * 0.45 + tWave);
+          ctx.closePath(); ctx.fill();
+
+          ctx.restore();
         }
-
-        // Eye (Detailed orb with reflection)
-        ctx.fillStyle = '#000';
-        ctx.beginPath(); ctx.arc(sz * 0.82, -sz * 0.06, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#fff';
-        ctx.beginPath(); ctx.arc(sz * 0.83, -sz * 0.07, 0.8, 0, Math.PI * 2); ctx.fill();
-
-        // 3. Hydrodynamic Fins
-        ctx.fillStyle = '#1a2a3a';
-
-        // Dorsal fin
-        ctx.beginPath();
-        ctx.moveTo(sz * 0.2, -sz * 0.25);
-        ctx.quadraticCurveTo(sz * 0.0, -sz * 0.7, -sz * 0.3, -sz * 0.25);
-        ctx.fill();
-
-        // Pectoral fin
-        ctx.beginPath();
-        ctx.moveTo(sz * 0.45, sz * 0.15);
-        ctx.lineTo(sz * 0.1, sz * 0.55);
-        ctx.lineTo(-sz * 0.1, sz * 0.2);
-        ctx.fill();
-
-        // Tail (Powerful forked caudal fin)
-        const tWave = Math.sin(s.phase * 2.0) * 12;
-        ctx.beginPath();
-        ctx.moveTo(-sz * 0.75, 0);
-        ctx.lineTo(-sz * 1.15, -sz * 0.45 + tWave);
-        ctx.lineTo(-sz * 0.9, 0);
-        ctx.lineTo(-sz * 1.15, sz * 0.45 + tWave);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.restore();
       }
 
       function drawPredatorWaves() {
@@ -3433,7 +3406,7 @@
           let cox = 0, coy = 0;
           let sepX = 0, sepY = 0;
 
-          const predatorActive = predator.active && predator.shark;
+          const predatorActive = predator.active && predator.sharks.length > 0;
           const searchRadius = predatorActive ? 220 : 60;
           const maxNeighbors = predatorActive ? 60 : 18;
 
