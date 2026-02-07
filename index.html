@@ -1331,9 +1331,9 @@
             s.vy = (s.vy + Math.sin(s.heading) * moveSpd) * 0.5;
 
           } else {
-            // Fleeing logic
-            s.fleeProgress = Math.min(1, s.fleeProgress + dt / 800);
-            const spd = (3.0 + s.fleeProgress * 4.0);
+            // Fleeing logic (Faster retreat)
+            s.fleeProgress = Math.min(1, s.fleeProgress + dt / 600); // 0.6s exit instead of 0.8s
+            const spd = (4.0 + s.fleeProgress * 6.0);
             const targetHeading = Math.atan2(s.exitDy || 0, s.exitDx || -1);
             let angleDiff = targetHeading - s.heading;
             while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
@@ -1362,6 +1362,10 @@
         let totalFx = 0, totalFy = 0;
 
         for (const s of predator.sharks) {
+          const fleeA = s.fleeing ? Math.max(0, 1 - s.fleeProgress * 1.9) : 1;
+          const alpha = fleeA;
+          if (alpha <= 0.01) continue; // Skip forces for nearly invisible sharks
+
           const dx = f.x - s.x, dy = f.y - s.y;
           const dist = Math.hypot(dx, dy) || 1;
 
@@ -1372,22 +1376,22 @@
           if (dist < vacuumRange) {
             if (dist < bodyRange) {
               const ratio = (1 - dist / bodyRange) ** 1.8;
-              totalFx += (dx / dist) * ratio * (isStrike ? 160 : 85);
-              totalFy += (dy / dist) * ratio * (isStrike ? 160 : 85);
+              totalFx += (dx / dist) * ratio * (isStrike ? 160 : 85) * alpha;
+              totalFy += (dy / dist) * ratio * (isStrike ? 160 : 85) * alpha;
             } else {
               const vacuumMid = (bodyRange + vacuumRange) * 0.5;
               const pullRatio = Math.max(0, 1 - Math.abs(dist - vacuumMid) / (vacuumRange - bodyRange));
               const concentrate = (isStrike ? 45 : 25) * pullRatio;
               const nx = -dy / dist, ny = dx / dist;
-              totalFx += (dx / dist) * concentrate * 0.5 + nx * concentrate * 0.3;
-              totalFy += (dy / dist) * concentrate * 0.5 + ny * concentrate * 0.3;
+              totalFx += ((dx / dist) * concentrate * 0.5 + nx * concentrate * 0.3) * alpha;
+              totalFy += ((dy / dist) * concentrate * 0.5 + ny * concentrate * 0.3) * alpha;
             }
 
             const cdx = migration.centerX - f.x, cdy = migration.centerY - f.y;
             const cd = Math.hypot(cdx, cdy) || 1;
             const swirl = (isStrike ? 50 : 25) * (1 - dist / vacuumRange);
-            totalFx += (-cdy / cd) * swirl;
-            totalFy += (cdx / cd) * swirl;
+            totalFx += (-cdy / cd) * swirl * alpha;
+            totalFy += (cdx / cd) * swirl * alpha;
           }
         }
         return { fx: totalFx, fy: totalFy };
@@ -3406,7 +3410,10 @@
           let cox = 0, coy = 0;
           let sepX = 0, sepY = 0;
 
-          const predatorActive = predator.active && predator.sharks.length > 0;
+          // Only consider non-fleeing sharks as "Active threat" for school panic
+          const activeSharks = predator.sharks.filter(s => !s.fleeing);
+          const predatorActive = predator.active && activeSharks.length > 0;
+
           const searchRadius = predatorActive ? 220 : 60;
           const maxNeighbors = predatorActive ? 60 : 18;
 
@@ -3455,7 +3462,7 @@
             const mvx = avx * inv, mvy = avy * inv;
             const mx = cox * inv, my = coy * inv;
 
-            const panicMod = predatorActive ? 6.0 : 1.0; // Moderated tightening to prevent linear collapse
+            const panicMod = predatorActive ? 4.0 : 1.0; // Reduced to 4.0 to keep school plump
 
             // Standardize gating for all schooling forces
             if (!(f.suppressAttraction > 0)) {
