@@ -3401,6 +3401,10 @@
           let cox = 0, coy = 0;
           let sepX = 0, sepY = 0;
 
+          const predatorActive = predator.active && predator.shark;
+          const searchRadius = predatorActive ? 220 : 60;
+          const maxNeighbors = predatorActive ? 60 : 18;
+
           // Neighbor search
           for (let oy = -1; oy <= 1; oy++) {
             const yy = cy + oy;
@@ -3415,8 +3419,6 @@
                 const o = fish[j];
                 const dx = o.x - f.x;
                 const dy = o.y - f.y;
-                const predatorActive = predator.active && predator.shark;
-                const searchRadius = predatorActive ? 220 : 60; // Even larger detection for school-wide pull
                 const d2 = dx * dx + dy * dy;
                 if (d2 > searchRadius * searchRadius) continue;
                 const d = Math.sqrt(d2) + 1e-6;
@@ -3435,12 +3437,11 @@
                 }
 
                 count++;
-                const maxNeighbors = predatorActive ? 60 : 18;
                 if (count >= maxNeighbors) break;
               }
-              if (count >= (predatorActive ? 60 : 18)) break;
+              if (count >= maxNeighbors) break;
             }
-            if (count >= (predatorActive ? 60 : 18)) break;
+            if (count >= maxNeighbors) break;
           }
 
           // Schooling forces
@@ -3449,7 +3450,6 @@
             const mvx = avx * inv, mvy = avy * inv;
             const mx = cox * inv, my = coy * inv;
 
-            const predatorActive = predator.active && predator.shark;
             const panicMod = predatorActive ? 12.0 : 1.0; // Extreme school tightening
 
             // Standardize gating for all schooling forces
@@ -3598,7 +3598,6 @@
           }
 
           // --- Frame-rate independent drag ---
-          const predatorActive = predator.active && predator.shark;
           const migSpeedMod = (migration.speedMod || 1) * (predatorActive ? 1.8 : 1.0); // Boost speed when shark is hunting
           const baseDragVal = baseDrag + (f.isLarge ? -0.005 : (f.size > 4 ? 0.00 : 0.02));
           const dragDecay = Math.pow(baseDragVal, dt / 16.667);
