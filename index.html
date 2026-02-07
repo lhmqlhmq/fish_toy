@@ -1354,11 +1354,11 @@
           fx = (dx / dist) * ratio * repStr;
           fy = (dy / dist) * ratio * repStr;
 
-          // Swirl and focus induction (Tighter school concentration)
+          // Swirl and focus induction (EXTREME school concentration)
           const cdx = migration.centerX - f.x, cdy = migration.centerY - f.y;
           const cd = Math.hypot(cdx, cdy) || 1;
-          const swirlStr = (isLunge ? 35.0 : 20.0) * (1 - dist / range);
-          const concentrateStr = 15.0 * (1 - dist / range);
+          const swirlStr = (isLunge ? 45.0 : 25.0) * (1 - dist / range);
+          const concentrateStr = (isLunge ? 80.0 : 45.0) * (1 - dist / range);
           fx += (-cdy / cd) * swirlStr + (cdx / cd) * concentrateStr;
           fy += (cdx / cd) * swirlStr + (cdy / cd) * concentrateStr;
         }
@@ -3409,7 +3409,10 @@
                 cox += o.x; coy += o.y;
 
                 // Separation - larger fish need more space
-                const sepRad = f.isLarge ? 45 : (f.size > 4 ? 32 : 25);
+                const predatorActive = predator.active && predator.shark;
+                let sepRad = f.isLarge ? 45 : (f.size > 4 ? 32 : 25);
+                if (predatorActive) sepRad *= 0.4; // Allow much tighter packing during shark attack
+
                 if (d < sepRad) {
                   const push = (sepRad - d) / sepRad;
                   sepX -= (dx / d) * push;
@@ -3431,7 +3434,7 @@
             const mx = cox * inv, my = coy * inv;
 
             const predatorActive = predator.active && predator.shark;
-            const panicMod = predatorActive ? 2.5 : 1.0; // School tightens up during panic
+            const panicMod = predatorActive ? 8.0 : 1.0; // Extreme school tightening
 
             // Standardize gating for all schooling forces
             if (!(f.suppressAttraction > 0)) {
